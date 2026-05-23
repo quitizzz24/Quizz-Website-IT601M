@@ -1,0 +1,6 @@
+{
+  "name": "EduQuiz",
+  "description": "Comprehensive semester-based academic quiz and assessment management platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
