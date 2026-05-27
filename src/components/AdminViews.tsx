@@ -199,14 +199,18 @@ export function AdminDashboard({
 // ==========================================
 interface AdminStudentsProps {
   students: any[];
+  onCreateStudent: (payload: any) => Promise<boolean>;
   onUpdateStudent: (id: string, payload: any) => Promise<void>;
   onDeleteStudent: (id: string) => Promise<void>;
+  onApproveStudent?: (id: string) => Promise<void>;
 }
 
 export function AdminStudents({
   students,
+  onCreateStudent,
   onUpdateStudent,
-  onDeleteStudent
+  onDeleteStudent,
+  onApproveStudent
 }: AdminStudentsProps) {
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -215,6 +219,16 @@ export function AdminStudents({
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editPassword, setEditPassword] = useState("");
+  const [editAvatar, setEditAvatar] = useState("");
+  const [editStreak, setEditStreak] = useState(0);
+
+  // Create Form State
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createEmail, setCreateEmail] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
+  const [createAvatar, setCreateAvatar] = useState("🎓");
+  const [createStreak, setCreateStreak] = useState(0);
 
   const filteredStudents = students.filter(s => 
     s.name.toLowerCase().includes(search.toLowerCase()) || 
@@ -223,9 +237,11 @@ export function AdminStudents({
 
   const startEdit = (s: any) => {
     setEditingId(s.id);
-    setEditName(s.name);
-    setEditEmail(s.email);
-    setEditPassword("student123"); // placeholder default edit password text
+    setEditName(s.name || "");
+    setEditEmail(s.email || "");
+    setEditPassword(""); // Blank default to preserve the hash unless explicitly modified
+    setEditAvatar(s.avatar || "🎓");
+    setEditStreak(s.streak || 0);
   };
 
   const saveEdit = async () => {
@@ -233,18 +249,47 @@ export function AdminStudents({
     await onUpdateStudent(editingId!, {
       name: editName,
       email: editEmail,
-      password: editPassword
+      password: editPassword,
+      avatar: editAvatar,
+      streak: Number(editStreak) || 0
     });
     setEditingId(null);
   };
 
+  const handleCreateStudentSubmit = async () => {
+    if (!createName || !createEmail || !createPassword) {
+      return;
+    }
+    const success = await onCreateStudent({
+      name: createName,
+      email: createEmail,
+      password: createPassword,
+      avatar: createAvatar,
+      streak: Number(createStreak) || 0
+    });
+    if (success) {
+      setShowCreateModal(false);
+      setCreateName("");
+      setCreateEmail("");
+      setCreatePassword("");
+      setCreateAvatar("🎓");
+      setCreateStreak(0);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in font-sans">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-serif italic text-[#2D2A29]">Student Enrollment Directory</h1>
-          <p className="text-xs text-[#8C847E]">Inspect records, revise names/emails or terminate inactive rosters.</p>
+          <p className="text-xs text-[#8C847E]">Inspect records, revise names/emails/streaks or add directly to the database.</p>
         </div>
+        <button 
+          onClick={() => setShowCreateModal(true)}
+          className="bg-[#5A6F56] text-white hover:bg-[#4A5D46] px-5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition"
+        >
+          <PlusCircle className="h-4 w-4" /> Add Student Account
+        </button>
       </div>
 
       {/* Search students utility bar */}
@@ -274,109 +319,255 @@ export function AdminStudents({
                   <tr>
                     <th className="p-4 pl-6">Student Account</th>
                     <th className="p-4">Quizzes Taken Log</th>
+                    <th className="p-4">Daily Streak</th>
                     <th className="p-4">Enrollment Joined Date</th>
                     <th className="p-4 text-right pr-6">Roster Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#F3F1ED] text-slate-700">
-                  {filteredStudents.map((student) => (
-                    <tr key={student.id} className="hover:bg-slate-50">
-                      <td className="p-4 pl-6 flex items-center gap-3">
-                        {student.avatar && student.avatar.trim() !== "" ? (
-                          <img src={student.avatar} className="w-10 h-10 rounded-full object-cover shrink-0" alt="" />
-                        ) : (
-                          <div className="w-10 h-10 rounded-full bg-[#E2E8F0] flex items-end justify-center overflow-hidden shrink-0">
-                            <svg className="w-[85%] h-[85%] text-white translate-y-[10%]" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                            </svg>
+                  {filteredStudents.map((student) => {
+                    const isEmoji = student.avatar && student.avatar.length <= 4;
+                    return (
+                      <tr key={student.id} className="hover:bg-slate-50">
+                        <td className="p-4 pl-6 flex items-center gap-3">
+                          {student.avatar && student.avatar.trim() !== "" ? (
+                            isEmoji ? (
+                              <div className="w-10 h-10 rounded-full bg-[#F2EDE7] flex items-center justify-center text-lg shrink-0">
+                                {student.avatar}
+                              </div>
+                            ) : (
+                              <img src={student.avatar} className="w-10 h-10 rounded-full object-cover shrink-0" alt="" />
+                            )
+                          ) : (
+                            <div className="w-10 h-10 rounded-full bg-[#E2E8F0] flex items-end justify-center overflow-hidden shrink-0">
+                              <svg className="w-[85%] h-[85%] text-white translate-y-[10%]" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                              </svg>
+                            </div>
+                          )}
+                          <div>
+                            <p className="font-bold text-[#2D2A29] flex items-center gap-1.5 flex-wrap">
+                              <span>{student.name}</span>
+                              {student.isApproved === false && (
+                                <span className="bg-amber-100/75 border border-amber-305 text-amber-900 px-2 py-0.5 rounded-full text-[9px] font-bold font-mono tracking-wide uppercase">
+                                  Pending approval
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-[10px] text-[#8C847E] font-mono">{student.email}</p>
                           </div>
-                        )}
-                        <div>
-                          <p className="font-bold text-[#2D2A29]">{student.name}</p>
-                          <p className="text-[10px] text-[#8C847E]">{student.email}</p>
-                        </div>
-                      </td>
-                      <td className="p-4 font-mono font-bold">
-                        {student.quizzesTakenCount} Finished
-                      </td>
-                      <td className="p-4 text-[#8C847E] font-medium">
-                        {new Date(student.createdAt).toLocaleDateString(undefined, {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        })}
-                      </td>
-                      <td className="p-4 text-right pr-6 space-x-2 shrink-0">
-                        <button 
-                          onClick={() => startEdit(student)}
-                          className="p-2 text-slate-500 hover:text-[#5A6F56] hover:bg-slate-100 rounded-lg transition"
-                          title="Edit roster data"
-                        >
-                          <Edit className="h-4 w-4" />
-                        </button>
-                        <button 
-                          onClick={() => onDeleteStudent(student.id)}
-                          className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                          title="Purge student"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="p-4 font-mono font-bold text-slate-600">
+                          {student.quizzesTakenCount} Finished
+                        </td>
+                        <td className="p-4">
+                          <span className="inline-flex items-center gap-1.5 px-2 py-1 bg-amber-50 text-amber-800 font-bold font-mono rounded-lg border border-amber-200/50">
+                            🔥 {student.streak || 0}
+                          </span>
+                        </td>
+                        <td className="p-4 text-[#8C847E] font-medium font-mono">
+                          {student.createdAt ? new Date(student.createdAt).toLocaleDateString(undefined, {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric'
+                          }) : "N/A"}
+                        </td>
+                        <td className="p-4 text-right pr-6 space-x-2 shrink-0">
+                          {student.isApproved === false && onApproveStudent && (
+                            <button
+                              onClick={() => onApproveStudent(student.id)}
+                              className="p-2 text-emerald-600 hover:text-emerald-850 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                              title="Approve / Activate student credentials manually"
+                            >
+                              <Check className="h-4 w-4" />
+                            </button>
+                          )}
+                          <button 
+                            onClick={() => startEdit(student)}
+                            className="p-2 text-slate-500 hover:text-[#5A6F56] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                            title="Edit roster data directly"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button 
+                            onClick={() => onDeleteStudent(student.id)}
+                            className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                            title="Purge student from database"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             {/* Mobile View Card Stack */}
             <div className="block md:hidden divide-y divide-[#F3F1ED]">
-              {filteredStudents.map((student) => (
-                <div key={student.id} className="p-5 space-y-4">
-                  <div className="flex items-center gap-3">
-                    {student.avatar && student.avatar.trim() !== "" ? (
-                      <img src={student.avatar} className="w-11 h-11 rounded-full object-cover shrink-0" alt="" />
-                    ) : (
-                      <div className="w-11 h-11 rounded-full bg-[#E2E8F0] flex items-end justify-center overflow-hidden shrink-0">
-                        <svg className="w-[85%] h-[85%] text-white translate-y-[10%]" fill="currentColor" viewBox="0 0 24 24">
-                          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                        </svg>
+              {filteredStudents.map((student) => {
+                const isEmoji = student.avatar && student.avatar.length <= 4;
+                return (
+                  <div key={student.id} className="p-5 space-y-4">
+                    <div className="flex items-center gap-3">
+                      {student.avatar && student.avatar.trim() !== "" ? (
+                        isEmoji ? (
+                          <div className="w-11 h-11 rounded-full bg-[#F2EDE7] flex items-center justify-center text-xl shrink-0">
+                            {student.avatar}
+                          </div>
+                        ) : (
+                          <img src={student.avatar} className="w-11 h-11 rounded-full object-cover shrink-0" alt="" />
+                        )
+                      ) : (
+                        <div className="w-11 h-11 rounded-full bg-[#E2E8F0] flex items-end justify-center overflow-hidden shrink-0">
+                          <svg className="w-[85%] h-[85%] text-white translate-y-[10%]" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                          </svg>
+                        </div>
+                      )}
+                      <div>
+                        <h4 className="font-bold text-sm text-[#2D2A29] flex items-center gap-1.5 flex-wrap">
+                          <span>{student.name}</span>
+                          {student.isApproved === false && (
+                            <span className="bg-amber-100/75 border border-amber-305 text-amber-900 px-1.5 py-0.5 rounded-full text-[8px] font-bold font-mono tracking-wide uppercase">
+                              Pending approval
+                            </span>
+                          )}
+                        </h4>
+                        <p className="text-xs text-[#8C847E] font-mono">{student.email}</p>
                       </div>
-                    )}
-                    <div>
-                      <h4 className="font-bold text-sm text-[#2D2A29]">{student.name}</h4>
-                      <p className="text-xs text-[#8C847E]">{student.email}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs font-semibold py-1">
+                      <div className="bg-[#FAF9F6] p-2 rounded-xl text-center border border-[#EBE7E0]">
+                        <span className="text-[#8C847E] text-[10px] uppercase font-mono block">Assessments</span>
+                        <strong className="text-slate-800 font-bold block mt-0.5">{student.quizzesTakenCount}</strong>
+                      </div>
+                      <div className="bg-amber-50/40 p-2 rounded-xl text-center border border-amber-100">
+                        <span className="text-amber-800 text-[10px] uppercase font-mono block">Streak</span>
+                        <strong className="text-amber-900 font-bold block mt-0.5">🔥 {student.streak || 0}</strong>
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2 border-t border-[#F3F1ED] leading-none">
+                      {student.isApproved === false && onApproveStudent && (
+                        <button
+                          onClick={() => onApproveStudent(student.id)}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl cursor-pointer"
+                        >
+                          Approve Account
+                        </button>
+                      )}
+                      <button
+                        onClick={() => startEdit(student)}
+                        className="px-4 py-2 bg-[#F3F1ED] text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
+                      >
+                        Edit Student
+                      </button>
+                      <button
+                        onClick={() => onDeleteStudent(student.id)}
+                        className="px-4 py-2 bg-rose-50 text-rose-700 text-xs font-bold rounded-xl cursor-pointer"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
-                  <div className="flex justify-between items-center text-xs font-medium">
-                    <span className="text-[#8C847E]">Assessments Logged:</span>
-                    <strong className="text-slate-800 font-bold">{student.quizzesTakenCount}</strong>
-                  </div>
-                  <div className="flex justify-end gap-2 pt-2 border-t border-[#F3F1ED] leading-none">
-                    <button
-                      onClick={() => startEdit(student)}
-                      className="px-4 py-2 bg-[#F3F1ED] text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
-                    >
-                      Edit student
-                    </button>
-                    <button
-                      onClick={() => onDeleteStudent(student.id)}
-                      className="px-4 py-2 bg-rose-50 text-rose-700 text-xs font-bold rounded-xl cursor-pointer"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
       </div>
 
+      {/* CREATE STUDENT POPUP MODAL */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white max-w-md w-full p-6 leading-relaxed rounded-[32px] border border-[#EBE7E0] space-y-4 shadow-2xl relative">
+            <h3 className="text-lg font-serif italic text-[#2D2A29] font-bold">Add Student to Database Directly</h3>
+            <p className="text-[10px] text-stone-500 mt-0.5">Define a real student authorization profile directly. No single-use codes needed.</p>
+
+            <div className="space-y-3 pt-2">
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Full Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Maria Clara"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Email Address</label>
+                <input
+                  type="email"
+                  placeholder="e.g. maria@edu.ph"
+                  value={createEmail}
+                  onChange={(e) => setCreateEmail(e.target.value)}
+                  className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Initial Password</label>
+                <input
+                  type="password"
+                  placeholder="e.g. student123"
+                  value={createPassword}
+                  onChange={(e) => setCreatePassword(e.target.value)}
+                  className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Avatar / Symbol</label>
+                  <input
+                    type="text"
+                    value={createAvatar}
+                    onChange={(e) => setCreateAvatar(e.target.value)}
+                    placeholder="Emoji e.g. 🎓 or Image URL"
+                    className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Activity Streak 🔥</label>
+                  <input
+                    type="number"
+                    value={createStreak}
+                    onChange={(e) => setCreateStreak(Number(e.target.value) || 0)}
+                    className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4 border-t border-stone-100">
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="px-4 py-2 bg-slate-100 text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
+              >
+                Close Dialog
+              </button>
+              <button
+                onClick={handleCreateStudentSubmit}
+                disabled={!createName || !createEmail || !createPassword}
+                className="px-5 py-2 bg-[#5A6F56] disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer hover:bg-[#4A5D46]"
+              >
+                Commit to Database
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Edit Student Backdrop Modal */}
       {editingId && (
         <div className="fixed inset-0 bg-black/45 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
           <div className="bg-white max-w-md w-full p-6 leading-relaxed rounded-[32px] border border-[#EBE7E0] space-y-4 shadow-xl">
-            <h3 className="text-lg font-serif italic text-[#2D2A29] font-bold">Revise Student Roster Info</h3>
+            <h3 className="text-lg font-serif italic text-[#2D2A29] font-bold">Direct Database Editor</h3>
+            <p className="text-[10px] text-stone-500 mt-0.5">You are modifying records directly. Changes reflect in real-time scores.</p>
             
             <div className="space-y-3 pt-2">
               <div className="space-y-1">
@@ -400,18 +591,40 @@ export function AdminStudents({
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Update Password</label>
+                <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Change Password Hash</label>
                 <input
                   type="text"
                   value={editPassword}
                   onChange={(e) => setEditPassword(e.target.value)}
-                  placeholder="Keep field blank to maintain current keys"
+                  placeholder="Leave blank to maintain original password"
                   className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
                 />
               </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Avatar Symbol/URL</label>
+                  <input
+                    type="text"
+                    value={editAvatar}
+                    onChange={(e) => setEditAvatar(e.target.value)}
+                    className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold tracking-widest text-[#8C847E] block font-mono">Streak 🔥 Days</label>
+                  <input
+                    type="number"
+                    value={editStreak}
+                    onChange={(e) => setEditStreak(Number(e.target.value) || 0)}
+                    className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl text-xs py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-4">
+            <div className="flex justify-end gap-2 pt-4 border-t border-stone-100">
               <button
                 onClick={() => setEditingId(null)}
                 className="px-4 py-2 bg-slate-100 text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
@@ -1506,20 +1719,29 @@ interface AdminLeaderboardProps {
   leaderboard: LeaderboardEntry[];
   onToggleVisibility: (visible: boolean) => Promise<void>;
   onResetLeaderboard: (target: string) => Promise<void>;
+  onConfirmDialog?: (title: string, message: string, onConfirm: () => void) => void;
 }
 
 export function AdminLeaderboard({
   settings,
   leaderboard,
   onToggleVisibility,
-  onResetLeaderboard
+  onResetLeaderboard,
+  onConfirmDialog
 }: AdminLeaderboardProps) {
   const [resetTarget, setResetTarget] = useState("all");
 
   const handleReset = () => {
-    const isConfirmed = window.confirm("Are you absolute sure you want to delete all student attempt data across your selection? This cannot be undone.");
-    if (isConfirmed) {
-      onResetLeaderboard(resetTarget);
+    const msg = "Are you sure you want to delete all student attempt data across your selection? This cannot be undone.";
+    if (onConfirmDialog) {
+      onConfirmDialog("Delete Attempt Data", msg, () => {
+        onResetLeaderboard(resetTarget);
+      });
+    } else {
+      const isConfirmed = window.confirm(msg);
+      if (isConfirmed) {
+        onResetLeaderboard(resetTarget);
+      }
     }
   };
 

@@ -6,6 +6,8 @@ export interface User {
   avatar: string;
   streak: number;
   createdAt: string;
+  isGuest?: boolean;
+  isApproved?: boolean;
 }
 
 export interface Quiz {
@@ -86,3 +88,17 @@ export interface Settings {
   logoUrl?: string;
   mirrorToSupabase?: boolean;
 }
+
+export interface StudentQuestionSubmission {
+  id: string;
+  studentId: string;
+  studentName: string;
+  text: string;
+  subject: string;
+  options: string[];
+  correctAnswer: number;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  createdAt: string;
+  adminFeedback?: string;
+}
+

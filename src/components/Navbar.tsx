@@ -1,4 +1,4 @@
-import { LogOut, User as UserIcon, Settings as SettingsIcon, BarChart2, Shield, Calendar, Trophy, BookOpen } from "lucide-react";
+import { LogOut, User as UserIcon, Settings as SettingsIcon, BarChart2, Shield, Calendar, Trophy, BookOpen, FileQuestion } from "lucide-react";
 import { User, Settings } from "../types";
 
 interface NavbarProps {
@@ -89,6 +89,15 @@ export function Navbar({ user, settings, currentView, onNavigate, onLogout }: Na
                       Students
                     </button>
                     <button
+                      onClick={() => onNavigate("admin-submissions")}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition duration-150 ${
+                        currentView === "admin-submissions" ? "bg-[#2D2A29] text-white" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
+                      }`}
+                    >
+                      <FileQuestion className="h-3.5 w-3.5" />
+                      Submissions
+                    </button>
+                    <button
                       onClick={() => onNavigate("admin-settings")}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition duration-150 ${
                         currentView === "admin-settings" ? "bg-[#2D2A29] text-white" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
@@ -100,43 +109,54 @@ export function Navbar({ user, settings, currentView, onNavigate, onLogout }: Na
                   </div>
                 ) : (
                   // Student Regular Navbar Menu
-                  <div className="hidden lg:flex items-center gap-1 border-r border-[#EBE7E0] pr-4 mr-1">
-                    <button
-                      onClick={() => onNavigate("student-dashboard")}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
-                        currentView === "student-dashboard" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
-                      }`}
-                    >
-                      Dashboard
-                    </button>
-                    <button
-                      onClick={() => onNavigate("student-quiz-list")}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
-                        currentView === "student-quiz-list" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
-                      }`}
-                    >
-                      <BookOpen className="h-3.5 w-3.5" />
-                      Quizzes
-                    </button>
-                    <button
-                      onClick={() => onNavigate("student-progress")}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
-                        currentView === "student-progress" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
-                      }`}
-                    >
-                      <BarChart2 className="h-3.5 w-3.5" />
-                      Analytics
-                    </button>
-                    <button
-                      onClick={() => onNavigate("student-leaderboard")}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
-                        currentView === "student-leaderboard" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
-                      }`}
-                    >
-                      <Trophy className="h-3.5 w-3.5" />
-                      Leaderboard
-                    </button>
-                  </div>
+                  user.isApproved !== false ? (
+                    <div className="hidden lg:flex items-center gap-1 border-r border-[#EBE7E0] pr-4 mr-1">
+                      <button
+                        onClick={() => onNavigate("student-dashboard")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
+                          currentView === "student-dashboard" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
+                        }`}
+                      >
+                        Dashboard
+                      </button>
+                      <button
+                        onClick={() => onNavigate("student-quiz-list")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
+                          currentView === "student-quiz-list" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
+                        }`}
+                      >
+                        <BookOpen className="h-3.5 w-3.5" />
+                        Quizzes
+                      </button>
+                      <button
+                        onClick={() => onNavigate("student-submissions")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
+                          currentView === "student-submissions" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
+                        }`}
+                      >
+                        <FileQuestion className="h-3.5 w-3.5" />
+                        Suggest Qs
+                      </button>
+                      <button
+                        onClick={() => onNavigate("student-progress")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
+                          currentView === "student-progress" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
+                        }`}
+                      >
+                        <BarChart2 className="h-3.5 w-3.5" />
+                        Analytics
+                      </button>
+                      <button
+                        onClick={() => onNavigate("student-leaderboard")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition duration-150 ${
+                          currentView === "student-leaderboard" ? "bg-[#DDE4DC]/60 text-[#4A5D46]" : "text-[#6B635E] hover:bg-[#EBE7E0]/45"
+                        }`}
+                      >
+                        <Trophy className="h-3.5 w-3.5" />
+                        Leaderboard
+                      </button>
+                    </div>
+                  ) : null
                 )}
 
                 {/* Profile Widget dropdown or indicators */}

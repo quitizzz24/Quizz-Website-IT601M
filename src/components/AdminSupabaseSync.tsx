@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { 
   Database, RefreshCw, Power, CheckCircle2, XCircle, AlertCircle, 
-  Terminal, Copy, Check, Server, HardDrive
+  Terminal, Copy, Check, Server, HardDrive, Lock
 } from "lucide-react";
 
 interface TableStat {
@@ -20,17 +20,44 @@ interface SupabaseStatus {
   serviceRoleKeyConfigured?: boolean;
 }
 
-export function AdminSupabaseSync() {
+interface AdminSupabaseSyncProps {
+  currentUser?: {
+    id: string;
+    email: string;
+    role: string;
+  } | null;
+}
+
+export function AdminSupabaseSync({ currentUser }: AdminSupabaseSyncProps = {}) {
   const [status, setStatus] = useState<SupabaseStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
   const [syncResult, setSyncResult] = useState<{ success: boolean; message: string; results?: any } | null>(null);
 
+  const getLoggedInUser = () => {
+    try {
+      const saved = localStorage.getItem("eduquiz-student-user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const loggedUser = currentUser || getLoggedInUser();
+  const allowedEmail = "admin@eduquiz.com";
+  const isAuthorized = loggedUser?.email?.trim().toLowerCase() === allowedEmail;
+
   const fetchStatus = async () => {
+    if (!isAuthorized) return;
     setLoading(true);
     try {
-      const res = await fetch("/api/supabase/status");
+      const email = loggedUser?.email || "";
+      const res = await fetch(`/api/supabase/status?email=${encodeURIComponent(email)}`, {
+        headers: {
+          "x-user-email": email
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         setStatus(data);
@@ -43,17 +70,23 @@ export function AdminSupabaseSync() {
   };
 
   useEffect(() => {
-    fetchStatus();
-  }, []);
+    if (isAuthorized) {
+      fetchStatus();
+    }
+  }, [isAuthorized]);
 
   const handleToggleMirror = async () => {
-    if (!status) return;
+    if (!status || !isAuthorized) return;
     try {
       const nextEnabled = !status.mirrorActive;
+      const email = loggedUser?.email || "";
       const res = await fetch("/api/supabase/toggle-mirror", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: nextEnabled })
+        headers: { 
+          "Content-Type": "application/json",
+          "x-user-email": email
+        },
+        body: JSON.stringify({ enabled: nextEnabled, email })
       });
       if (res.ok) {
         const data = await res.json();
@@ -67,11 +100,18 @@ export function AdminSupabaseSync() {
   };
 
   const handleSyncNow = async () => {
+    if (!isAuthorized) return;
     setSyncing(true);
     setSyncResult(null);
     try {
+      const email = loggedUser?.email || "";
       const res = await fetch("/api/supabase/sync", {
-        method: "POST"
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-email": email
+        },
+        body: JSON.stringify({ email })
       });
       const data = await res.json();
       setSyncResult(data);
@@ -98,7 +138,8 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL,
   avatar TEXT,
   "createdAt" TEXT NOT NULL,
-  streak INTEGER DEFAULT 0
+  streak INTEGER DEFAULT 0,
+  "isApproved" BOOLEAN DEFAULT TRUE
 );
 
 -- Create quizzes table
@@ -160,13 +201,62 @@ ALTER TABLE quizzes DISABLE ROW LEVEL SECURITY;
 ALTER TABLE questions DISABLE ROW LEVEL SECURITY;
 ALTER TABLE assignments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE attempts DISABLE ROW LEVEL SECURITY;
-ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`;
+ALTER TABLE settings DISABLE ROW LEVEL SECURITY;
+
+-- Create secure trigger that handles clean auth signups to user schema automatically
+CREATE OR REPLACE FUNCTION public.handle_new_user_signup()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.users (id, name, email, "passwordHash", role, avatar, "createdAt", streak, "isApproved")
+    VALUES (
+        -- Map metadata ID, falling back to the genuine Supabase Auth UUID for consistency
+        COALESCE(new.raw_user_meta_data->>'id', new.id::text),
+        COALESCE(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+        new.email,
+        'supabase-auth-managed',
+        COALESCE(new.raw_user_meta_data->>'role', 'STUDENT'),
+        COALESCE(new.raw_user_meta_data->>'avatar', '👤'),
+        to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+        0,
+        COALESCE((new.raw_user_meta_data->>'isApproved')::boolean, true) -- Approved by default if self-registered
+    )
+    ON CONFLICT (id) DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Bind the trigger function block to run on every successful auth signup
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user_signup();`;
 
   const copySqlToClipboard = () => {
     navigator.clipboard.writeText(SQL_MIGRATE);
     setCopiedSql(true);
     setTimeout(() => setCopiedSql(false), 3000);
   };
+
+  if (!isAuthorized) {
+    return (
+      <div id="supabase-console-container" className="bg-[#FAF9F5] p-8 rounded-[32px] border border-[#EBE7E0] space-y-6 shadow-2xs w-full text-center">
+        <div className="max-w-md mx-auto py-8 space-y-4">
+          <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center mx-auto border border-amber-200 text-amber-650">
+            <Lock className="h-5 w-5 text-amber-600" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="font-serif italic text-lg font-bold text-[#2D2A29]">Supabase Sync Secured</h3>
+            <p className="text-xs text-[#8C847E] leading-relaxed">
+              This sandbox replication engine and Postgres database schema repository are restricted to the primary development administrator account (<span className="font-mono text-amber-800 bg-amber-50/60 px-1 py-0.5 rounded font-bold">admin@eduquiz.com</span>).
+            </p>
+          </div>
+          <p className="text-[11px] text-slate-500 bg-white border border-[#EBE7E0]/60 p-3.5 rounded-2xl">
+            To prevent system conflict, credentials sync controls, real-time mirroring toggles, and database schema instantiation commands are locked for standard admin nodes or student profiles.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div id="supabase-console-container" className="bg-white p-6 rounded-[32px] border border-[#EBE7E0] space-y-6 shadow-2xs w-full">

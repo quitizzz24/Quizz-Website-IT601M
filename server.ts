@@ -45,11 +45,12 @@ if (supabaseUrl && supabaseServiceKey) {
 
 // Background mirroring helper
 async function mirrorRecordToSupabase(table: string, record: any) {
-  if (!supabase) return;
+  const client = supabaseAdmin || supabase;
+  if (!client) return;
   try {
     const cleanRecord = { ...record };
     // JSON fields might need to be parsed or kept as is. Supabase handle objects/arrays natively for JSONB cols.
-    const { error } = await supabase.from(table).upsert([cleanRecord], { onConflict: 'id' });
+    const { error } = await client.from(table).upsert([cleanRecord], { onConflict: 'id' });
     if (error) {
       console.warn(`Supabase upsert warning on dynamic mirror to ${table}:`, error.message);
     }
@@ -59,9 +60,10 @@ async function mirrorRecordToSupabase(table: string, record: any) {
 }
 
 async function deleteRecordFromSupabase(table: string, id: string) {
-  if (!supabase) return;
+  const client = supabaseAdmin || supabase;
+  if (!client) return;
   try {
-    const { error } = await supabase.from(table).delete().eq('id', id);
+    const { error } = await client.from(table).delete().eq('id', id);
     if (error) {
       console.warn(`Supabase delete warning on dynamic mirror from ${table}:`, error.message);
     }
@@ -87,7 +89,14 @@ async function syncUserToSupabaseAuth(user: User): Promise<{ success: boolean; e
         }
       });
       if (error) {
-        if (error.message.includes("already registered") || error.message.includes("already exists") || error.message.includes("Email already in use")) {
+        const msg = error.message.toLowerCase();
+        if (
+          msg.includes("already registered") ||
+          msg.includes("already been registered") ||
+          msg.includes("already exists") ||
+          msg.includes("email already in use") ||
+          (msg.includes("already") && msg.includes("registered"))
+        ) {
           console.log(`Supabase Auth admin sync: ${user.email} already registered.`);
           return { success: true };
         }
@@ -121,7 +130,14 @@ async function syncUserToSupabaseAuth(user: User): Promise<{ success: boolean; e
       }
     });
     if (error) {
-      if (error.message.includes("already registered") || error.message.includes("already exists") || error.message.includes("Email already in use")) {
+      const msg = error.message.toLowerCase();
+      if (
+        msg.includes("already registered") ||
+        msg.includes("already been registered") ||
+        msg.includes("already exists") ||
+        msg.includes("email already in use") ||
+        (msg.includes("already") && msg.includes("registered"))
+      ) {
         console.log(`Supabase Auth sync: ${user.email} already registered.`);
         return { success: true };
       }
@@ -147,6 +163,7 @@ interface User {
   avatar: string;
   createdAt: string;
   streak: number;
+  isApproved?: boolean;
 }
 
 interface Quiz {
@@ -215,6 +232,19 @@ interface Settings {
   mirrorToSupabase?: boolean;
 }
 
+interface StudentQuestionSubmission {
+  id: string;
+  studentId: string;
+  studentName: string;
+  text: string;
+  subject: string;
+  options: string[];
+  correctAnswer: number;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  createdAt: string;
+  adminFeedback?: string;
+}
+
 // Database JSON State
 interface DB {
   users: User[];
@@ -224,6 +254,8 @@ interface DB {
   assignments: Assignment[];
   attempts: Attempt[];
   settings: Settings;
+  questionSubmissions?: StudentQuestionSubmission[];
+  verificationCodes?: string[];
 }
 
 const DB_FILE = path.join(process.cwd(), "db.json");
@@ -252,46 +284,6 @@ function loadDB(): DB {
           avatar: "",
           createdAt: new Date().toISOString(),
           streak: 3,
-        },
-        {
-          id: "u-student2",
-          name: "Alice Chen",
-          email: "alice@gmail.com",
-          passwordHash: "student123",
-          role: "STUDENT",
-          avatar: "",
-          createdAt: new Date().toISOString(),
-          streak: 7,
-        },
-        {
-          id: "u-student3",
-          name: "Marcus Jenkins",
-          email: "marcus@gmail.com",
-          passwordHash: "student123",
-          role: "STUDENT",
-          avatar: "",
-          createdAt: new Date().toISOString(),
-          streak: 1,
-        },
-        {
-          id: "u-student4",
-          name: "Sophia Rodriguez",
-          email: "sophia@gmail.com",
-          passwordHash: "student123",
-          role: "STUDENT",
-          avatar: "",
-          createdAt: new Date().toISOString(),
-          streak: 12,
-        },
-        {
-          id: "u-student5",
-          name: "Liam O'Connor",
-          email: "liam@gmail.com",
-          passwordHash: "student123",
-          role: "STUDENT",
-          avatar: "",
-          createdAt: new Date().toISOString(),
-          streak: 0,
         },
       ],
       quizzes: [
@@ -635,77 +627,6 @@ function loadDB(): DB {
           answers: { "qn-101": 2, "qn-102": 1, "qn-103": 2 },
           createdAt: new Date(Date.now() - 18 * 24 * 3600 * 1000).toISOString(),
         },
-        // Setup details for others
-        {
-          id: "at-2",
-          quizId: "q-1",
-          studentId: "u-student2",
-          score: 3,
-          total: 3,
-          passed: true,
-          answers: { "qn-101": 2, "qn-102": 1, "qn-103": 2 },
-          createdAt: new Date(Date.now() - 21 * 24 * 3600 * 1000).toISOString(),
-        },
-        {
-          id: "at-3",
-          quizId: "q-2",
-          studentId: "u-student2",
-          score: 2,
-          total: 3,
-          passed: true,
-          answers: { "qn-201": 2, "qn-202": 1, "qn-203": 1 },
-          createdAt: new Date(Date.now() - 8 * 24 * 3600 * 1000).toISOString(),
-        },
-        {
-          id: "at-4",
-          quizId: "q-3",
-          studentId: "u-student2",
-          score: 3,
-          total: 3,
-          passed: true,
-          answers: { "qn-301": 1, "qn-302": 2, "qn-303": 0 },
-          createdAt: new Date(Date.now() - 1 * 24 * 3600 * 1000).toISOString(),
-        },
-        {
-          id: "at-5",
-          quizId: "q-3",
-          studentId: "u-student3",
-          score: 1,
-          total: 3,
-          passed: false,
-          answers: { "qn-301": 0, "qn-302": 1, "qn-303": 0 },
-          createdAt: new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString(),
-        },
-        {
-          id: "at-6",
-          quizId: "q-1",
-          studentId: "u-student4",
-          score: 2,
-          total: 3,
-          passed: true,
-          answers: { "qn-101": 1, "qn-102": 1, "qn-103": 2 },
-          createdAt: new Date(Date.now() - 25 * 24 * 3600 * 1000).toISOString(),
-        },
-        {
-          id: "at-7",
-          quizId: "q-2",
-          studentId: "u-student4",
-          score: 3,
-          total: 3,
-          passed: true,
-          answers: { "qn-201": 2, "qn-202": 1, "qn-203": 0 },
-          createdAt: new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString(),
-        },
-        {
-          id: "at-8",
-          quizId: "q-3",
-          studentId: "u-student4",
-          score: 3,
-          total: 3,
-          passed: true,
-          answers: { "qn-301": 1, "qn-302": 2, "qn-303": 0 },
-          createdAt: new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString(),
-        }
       ],
       settings: {
         activeSemester: "MIDTERM",
@@ -713,25 +634,55 @@ function loadDB(): DB {
         siteName: "EduQuiz Academy",
         logoUrl: "🎓",
       },
+      questionSubmissions: [],
+      verificationCodes: ["EQ-ADMIN-PASS-2026", "DEMO-VIP", "QUIZ-ACCESS-OK"],
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(initialDB, null, 2), "utf-8");
     return initialDB;
   }
-  return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+  const parsed = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+  parsed.questionSubmissions = parsed.questionSubmissions || [];
+  if (parsed.verificationCodes === undefined) {
+    parsed.verificationCodes = ["EQ-ADMIN-PASS-2026", "DEMO-VIP", "QUIZ-ACCESS-OK"];
+  }
+
+  // Filter extra students to retain only admin(s) and the demo student account (email: student@eduquiz.com or ID u-student1)
+  if (Array.isArray(parsed.users)) {
+    parsed.users = parsed.users.filter((u: any) => u.role === "ADMIN" || u.email === "student@eduquiz.com" || u.id === "u-student1");
+  }
+
+  // Clean dangling reference records that belong to removed users
+  const activeUserIds = new Set(parsed.users.map((u: any) => u.id));
+  if (Array.isArray(parsed.attempts)) {
+    parsed.attempts = parsed.attempts.filter((at: any) => activeUserIds.has(at.studentId));
+  }
+  if (Array.isArray(parsed.assignments)) {
+    parsed.assignments = parsed.assignments.filter((a: any) => activeUserIds.has(a.studentId));
+  }
+
+  // Write back to persist immediately so that the file gets cleaned
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(parsed, null, 2), "utf-8");
+  } catch (e) {
+    console.error("Failed to persist clean db on load:", e);
+  }
+
+  return parsed;
 }
 
 // Helper to save DB
 function saveDB(db: DB) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf-8");
-  if (supabase && db.settings && db.settings.mirrorToSupabase) {
+  const client = supabaseAdmin || supabase;
+  if (client && db.settings && db.settings.mirrorToSupabase) {
     // Perform live-mirror operations in background
     Promise.all([
-      supabase.from("settings").upsert([{ id: "global-params", activeSemester: db.settings.activeSemester, leaderboardVisible: db.settings.leaderboardVisible, siteName: db.settings.siteName, logoUrl: db.settings.logoUrl || "🎓", mirrorToSupabase: db.settings.mirrorToSupabase }], { onConflict: "id" }),
-      db.users.length > 0 ? supabase.from("users").upsert(db.users, { onConflict: "id" }) : Promise.resolve(),
-      db.quizzes.length > 0 ? supabase.from("quizzes").upsert(db.quizzes.map(q => ({ id: q.id, title: q.title, subject: q.subject, description: q.description, semester: q.semester, timeLimit: q.timeLimit, status: q.status, createdAt: q.createdAt })), { onConflict: "id" }) : Promise.resolve(),
-      db.questions.length > 0 ? supabase.from("questions").upsert(db.questions.map(q => ({ id: q.id, quizId: q.quizId, text: q.text, options: q.options, correctAnswer: q.correctAnswer })), { onConflict: "id" }) : Promise.resolve(),
-      db.assignments.length > 0 ? supabase.from("assignments").upsert(db.assignments.map(a => ({ id: a.id, quizId: a.quizId, studentId: a.studentId, dueDate: a.dueDate, assignedAt: a.assignedAt, completedAt: a.completedAt })), { onConflict: "id" }) : Promise.resolve(),
-      db.attempts.length > 0 ? supabase.from("attempts").upsert(db.attempts.map(at => ({ id: at.id, quizId: at.quizId, studentId: at.studentId, score: at.score, total: at.total, passed: at.passed, answers: at.answers, createdAt: at.createdAt })), { onConflict: "id" }) : Promise.resolve()
+      client.from("settings").upsert([{ id: "global-params", activeSemester: db.settings.activeSemester, leaderboardVisible: db.settings.leaderboardVisible, siteName: db.settings.siteName, logoUrl: db.settings.logoUrl || "🎓", mirrorToSupabase: db.settings.mirrorToSupabase }], { onConflict: "id" }),
+      db.users.length > 0 ? client.from("users").upsert(db.users, { onConflict: "id" }) : Promise.resolve(),
+      db.quizzes.length > 0 ? client.from("quizzes").upsert(db.quizzes.map(q => ({ id: q.id, title: q.title, subject: q.subject, description: q.description, semester: q.semester, timeLimit: q.timeLimit, status: q.status, createdAt: q.createdAt })), { onConflict: "id" }) : Promise.resolve(),
+      db.questions.length > 0 ? client.from("questions").upsert(db.questions.map(q => ({ id: q.id, quizId: q.quizId, text: q.text, options: q.options, correctAnswer: q.correctAnswer })), { onConflict: "id" }) : Promise.resolve(),
+      db.assignments.length > 0 ? client.from("assignments").upsert(db.assignments.map(a => ({ id: a.id, quizId: a.quizId, studentId: a.studentId, dueDate: a.dueDate, assignedAt: a.assignedAt, completedAt: a.completedAt })), { onConflict: "id" }) : Promise.resolve(),
+      db.attempts.length > 0 ? client.from("attempts").upsert(db.attempts.map(at => ({ id: at.id, quizId: at.quizId, studentId: at.studentId, score: at.score, total: at.total, passed: at.passed, answers: at.answers, createdAt: at.createdAt })), { onConflict: "id" }) : Promise.resolve()
     ]).catch(err => {
       console.warn("Background auto-mirror to Supabase encountered a network issue:", err.message || err);
     });
@@ -750,10 +701,31 @@ async function startServer() {
   const db = loadDB();
 
   // --- Supabase Sync API Endpoints ---
+  // Helper to check if the requester is authorized as admin@eduquiz.com
+  const checkSupabaseAuth = (req: any): boolean => {
+    const emailHeader = req.headers["x-user-email"];
+    const emailQuery = req.query.email;
+    const emailBody = req.body?.email;
+    const email = emailHeader || emailQuery || emailBody || "";
+    return String(email).trim().toLowerCase() === "admin@eduquiz.com";
+  };
+
   app.get("/api/supabase/status", async (req, res) => {
     const isConfigured = !!supabaseUrl && !!supabaseAnonKey;
     const maskedUrl = supabaseUrl ? `${supabaseUrl.substring(0, 15)}...supabase.co` : "";
     
+    if (!checkSupabaseAuth(req)) {
+      return res.status(403).json({
+        configured: isConfigured,
+        status: "DISCONNECTED",
+        message: "Access Denied: Only the main administrator admin@eduquiz.com is authorized to review or manipulate Supabase Sync configurations.",
+        stats: null,
+        mirrorActive: false,
+        serviceRoleKeyConfigured: !!supabaseServiceKey,
+        error: "Forbidden"
+      });
+    }
+
     if (!isConfigured || !supabase) {
       return res.json({
         configured: false,
@@ -831,7 +803,15 @@ async function startServer() {
   });
 
   app.post("/api/supabase/sync", async (req, res) => {
-    if (!supabase) {
+    if (!checkSupabaseAuth(req)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access Denied: Only the main administrator admin@eduquiz.com is authorized to execute Supabase Cloud Sync operations."
+      });
+    }
+
+    const client = supabaseAdmin || supabase;
+    if (!client) {
       return res.status(400).json({ success: false, message: "Supabase is not configured yet. Configure env first." });
     }
 
@@ -847,14 +827,14 @@ async function startServer() {
         logoUrl: db.settings.logoUrl || "🎓",
         mirrorToSupabase: db.settings.mirrorToSupabase
       };
-      const { error: setErr } = await supabase.from("settings").upsert([settingsPayload], { onConflict: "id" });
+      const { error: setErr } = await client.from("settings").upsert([settingsPayload], { onConflict: "id" });
       results["settings"] = { success: !setErr, count: 1, error: setErr?.message };
 
       // Sync users & replicate accounts into Supabase Authentication systems
       let authSyncedCount = 0;
       const authErrorsList: string[] = [];
       if (db.users.length > 0) {
-        const { error: uErr } = await supabase.from("users").upsert(db.users, { onConflict: "id" });
+        const { error: uErr } = await client.from("users").upsert(db.users, { onConflict: "id" });
         results["users"] = { success: !uErr, count: db.users.length, error: uErr?.message };
 
         // Attempt authentication system migration for all registered entities
@@ -888,7 +868,7 @@ async function startServer() {
           status: q.status,
           createdAt: q.createdAt
         }));
-        const { error: qErr } = await supabase.from("quizzes").upsert(mappedQuizzes, { onConflict: "id" });
+        const { error: qErr } = await client.from("quizzes").upsert(mappedQuizzes, { onConflict: "id" });
         results["quizzes"] = { success: !qErr, count: db.quizzes.length, error: qErr?.message };
       } else {
         results["quizzes"] = { success: true, count: 0 };
@@ -903,7 +883,7 @@ async function startServer() {
           options: q.options,
           correctAnswer: q.correctAnswer
         }));
-        const { error: qnErr } = await supabase.from("questions").upsert(mappedQuestions, { onConflict: "id" });
+        const { error: qnErr } = await client.from("questions").upsert(mappedQuestions, { onConflict: "id" });
         results["questions"] = { success: !qnErr, count: db.questions.length, error: qnErr?.message };
       } else {
         results["questions"] = { success: true, count: 0 };
@@ -919,7 +899,7 @@ async function startServer() {
           assignedAt: a.assignedAt,
           completedAt: a.completedAt
         }));
-        const { error: aErr } = await supabase.from("assignments").upsert(mappedAssignments, { onConflict: "id" });
+        const { error: aErr } = await client.from("assignments").upsert(mappedAssignments, { onConflict: "id" });
         results["assignments"] = { success: !aErr, count: db.assignments.length, error: aErr?.message };
       } else {
         results["assignments"] = { success: true, count: 0 };
@@ -937,7 +917,7 @@ async function startServer() {
           answers: at.answers,
           createdAt: at.createdAt
         }));
-        const { error: attErr } = await supabase.from("attempts").upsert(mappedAttempts, { onConflict: "id" });
+        const { error: attErr } = await client.from("attempts").upsert(mappedAttempts, { onConflict: "id" });
         results["attempts"] = { success: !attErr, count: db.attempts.length, error: attErr?.message };
       } else {
         results["attempts"] = { success: true, count: 0 };
@@ -961,6 +941,13 @@ async function startServer() {
   });
 
   app.post("/api/supabase/toggle-mirror", (req, res) => {
+    if (!checkSupabaseAuth(req)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access Denied: Only the main administrator admin@eduquiz.com is authorized to toggle live database mirroring."
+      });
+    }
+
     const { enabled } = req.body;
     db.settings.mirrorToSupabase = !!enabled;
     saveDB(db);
@@ -994,16 +981,32 @@ async function startServer() {
         avatar: user.avatar,
         streak: user.streak,
         createdAt: user.createdAt,
+        isApproved: user.role === "ADMIN" || user.isApproved !== false
       },
       token: `mock-jwt-token-for-${user.id}`
     });
   });
 
   app.post("/api/auth/register", (req, res) => {
-    const { name, email, password } = req.body;
+    const { name, email, password, verificationCode } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email, and password are required" });
     }
+
+    let isApproved = true;
+    if (verificationCode && verificationCode.trim() !== "") {
+      db.verificationCodes = db.verificationCodes || [];
+      const codeIndex = db.verificationCodes.findIndex(c => c.toUpperCase() === (verificationCode || "").trim().toUpperCase());
+      
+      if (codeIndex === -1) {
+        return res.status(403).json({ 
+          message: "Invalid verification code. Please enter a valid code or leave the field empty to register without one.",
+        });
+      }
+      // Consume verification code
+      db.verificationCodes.splice(codeIndex, 1);
+    }
+
     const exists = db.users.some(u => u.email.toLowerCase() === email.toLowerCase());
     if (exists) {
       return res.status(400).json({ message: "Email is already registered" });
@@ -1017,7 +1020,8 @@ async function startServer() {
       role: "STUDENT",
       avatar: "",
       createdAt: new Date().toISOString(),
-      streak: 0
+      streak: 0,
+      isApproved
     };
 
     db.users.push(newUser);
@@ -1038,10 +1042,122 @@ async function startServer() {
         role: newUser.role,
         avatar: newUser.avatar,
         streak: newUser.streak,
-        createdAt: newUser.createdAt
+        createdAt: newUser.createdAt,
+        isApproved: newUser.isApproved
       },
       token: `mock-jwt-token-for-${newUser.id}`
     });
+  });
+
+  // Upgrade / verify a guest to fully register and sync local achievements to server
+  app.post("/api/auth/upgrade-guest", (req, res) => {
+    const { name, email, password, verificationCode, attempts = [] } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "All fields including Name, email, and password are required" });
+    }
+
+    let isApproved = true;
+    if (verificationCode && verificationCode.trim() !== "") {
+      db.verificationCodes = db.verificationCodes || [];
+      const codeIndex = db.verificationCodes.findIndex(c => c.toUpperCase() === (verificationCode || "").trim().toUpperCase());
+      
+      if (codeIndex === -1) {
+        return res.status(403).json({ 
+          message: "Invalid verification code. Please enter a valid code or leave the field empty to submit.",
+        });
+      }
+      // Consume the verification code
+      db.verificationCodes.splice(codeIndex, 1);
+    }
+
+    const exists = db.users.some(u => u.email.toLowerCase() === email.toLowerCase());
+    if (exists) {
+      return res.status(400).json({ message: "Email is already registered. Please login or choose a different email." });
+    }
+
+    const newUser: User = {
+      id: "u-" + Math.random().toString(36).substring(2, 9),
+      name,
+      email,
+      passwordHash: password,
+      role: "STUDENT",
+      avatar: "",
+      createdAt: new Date().toISOString(),
+      streak: 0,
+      isApproved
+    };
+
+    db.users.push(newUser);
+
+    // Sync guest attempts if provided
+    if (Array.isArray(attempts) && attempts.length > 0) {
+      db.attempts = db.attempts || [];
+      for (const att of attempts) {
+        const cleanAttempt = {
+          ...att,
+          id: "at-" + Math.random().toString(36).substring(2, 9),
+          studentId: newUser.id,
+          createdAt: att.createdAt || new Date().toISOString()
+        };
+        db.attempts.push(cleanAttempt);
+      }
+    }
+
+    saveDB(db);
+
+    if (supabase) {
+      syncUserToSupabaseAuth(newUser).catch(err => {
+        console.warn("Background auto-sync to Supabase Auth failed during guest upgrade:", err.message || err);
+      });
+    }
+
+    res.status(201).json({
+      user: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        avatar: newUser.avatar,
+        streak: newUser.streak,
+        createdAt: newUser.createdAt,
+        isApproved: newUser.isApproved
+      },
+      token: `mock-jwt-token-for-${newUser.id}`
+    });
+  });
+
+  // Get active verification codes list (Admin view)
+  app.get("/api/admin/verification-codes", (req, res) => {
+    db.verificationCodes = db.verificationCodes || [];
+    res.json(db.verificationCodes);
+  });
+
+  // Clear all active verification codes
+  app.delete("/api/admin/verification-codes", (req, res) => {
+    db.verificationCodes = [];
+    saveDB(db);
+    res.json({ success: true });
+  });
+
+  // Generate a new verification code (Admin command)
+  app.post("/api/admin/verification-codes", (req, res) => {
+    db.verificationCodes = db.verificationCodes || [];
+    const newCode = "EQ-" + Math.random().toString(36).substring(2, 6).toUpperCase() + "-" + Math.random().toString(36).substring(2, 6).toUpperCase();
+    db.verificationCodes.push(newCode);
+    saveDB(db);
+    res.status(201).json({ code: newCode });
+  });
+
+  // Delete a verification code (Admin delete)
+  app.delete("/api/admin/verification-codes/:code", (req, res) => {
+    const { code } = req.params;
+    db.verificationCodes = db.verificationCodes || [];
+    const index = db.verificationCodes.indexOf(code);
+    if (index !== -1) {
+      db.verificationCodes.splice(index, 1);
+      saveDB(db);
+    }
+    res.json({ success: true });
   });
 
   app.post("/api/auth/forgot-password", (req, res) => {
@@ -1084,30 +1200,128 @@ async function startServer() {
         streak: s.streak,
         createdAt: s.createdAt,
         quizzesTakenCount: studentAttempts.length,
+        isApproved: s.isApproved !== false,
       };
     });
     res.json(students);
   });
 
-  app.put("/api/students/:id", (req, res) => {
-    const { id } = req.params;
-    const { name, email, password } = req.body;
-    const student = db.users.find(u => u.id === id && u.role === "STUDENT");
-    if (!student) {
-      return res.status(404).json({ message: "Student not found" });
+  app.post("/api/students", (req, res) => {
+    const { name, email, password, avatar, streak } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "Name, email, and password are required" });
+    }
+    const exists = db.users.some(u => u.email.toLowerCase() === email.toLowerCase());
+    if (exists) {
+      return res.status(400).json({ message: "A user with this email already exists" });
     }
 
-    if (name) student.name = name;
-    if (email) student.email = email;
-    if (password) student.passwordHash = password;
+    const newStudent = {
+      id: "usr-" + Math.random().toString(36).substring(2, 9),
+      name,
+      email,
+      passwordHash: password,
+      role: "STUDENT" as const,
+      avatar: avatar || "🎓",
+      streak: Number(streak) || 0,
+      createdAt: new Date().toISOString(),
+      isApproved: true
+    };
+
+    db.users.push(newStudent);
+    saveDB(db);
+    res.json({ success: true, student: newStudent });
+  });
+
+  app.put("/api/students/:id", (req, res) => {
+    const { id } = req.params;
+    const { name, email, password, avatar, streak, isApproved } = req.body;
+    const student = db.users.find(u => u.id === id);
+    if (!student) {
+      return res.status(404).json({ message: "Student or User not found" });
+    }
+
+    if (name !== undefined) student.name = name;
+    if (email !== undefined) student.email = email;
+    if (password !== undefined && password !== "") student.passwordHash = password;
+    if (avatar !== undefined) student.avatar = avatar;
+    if (streak !== undefined) student.streak = Number(streak) || 0;
+    if (isApproved !== undefined) student.isApproved = !!isApproved;
 
     saveDB(db);
     res.json({ success: true, student });
   });
 
+  app.post("/api/students/:id/approve", (req, res) => {
+    const { id } = req.params;
+    const student = db.users.find(u => u.id === id);
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+    student.isApproved = true;
+    saveDB(db);
+    res.json({ success: true, message: `Student ${student.name} approved successfully.` });
+  });
+
+  app.post("/api/auth/verify-student", (req, res) => {
+    const { userId, verificationCode } = req.body;
+    if (!userId || !verificationCode) {
+      return res.status(400).json({ message: "User ID and code are required" });
+    }
+    const student = db.users.find(u => u.id === userId);
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+    db.verificationCodes = db.verificationCodes || [];
+    const codeIndex = db.verificationCodes.findIndex(c => c.toUpperCase() === (verificationCode || "").trim().toUpperCase());
+    if (codeIndex === -1) {
+      return res.status(403).json({ message: "Invalid or expired Admin Verification Code." });
+    }
+    db.verificationCodes.splice(codeIndex, 1);
+    student.isApproved = true;
+    saveDB(db);
+    res.json({
+      success: true,
+      user: {
+        id: student.id,
+        name: student.name,
+        email: student.email,
+        role: student.role,
+        avatar: student.avatar,
+        streak: student.streak,
+        createdAt: student.createdAt,
+        isApproved: true
+      }
+    });
+  });
+
+  app.get("/api/auth/check-status", (req, res) => {
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ message: "userId query parameter is required" });
+    }
+    const student = db.users.find(u => u.id === userId);
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+    res.json({
+      approved: student.role === "ADMIN" || student.isApproved !== false,
+      user: {
+        id: student.id,
+        name: student.name,
+        email: student.email,
+        role: student.role,
+        avatar: student.avatar,
+        streak: student.streak,
+        createdAt: student.createdAt,
+        isApproved: student.role === "ADMIN" || student.isApproved !== false
+      }
+    });
+  });
+
   app.delete("/api/students/:id", (req, res) => {
     const { id } = req.params;
-    const index = db.users.findIndex(u => u.id === id && u.role === "STUDENT");
+    const index = db.users.findIndex(u => u.id === id);
     if (index === -1) {
       return res.status(404).json({ message: "Student not found" });
     }
@@ -1285,6 +1499,82 @@ async function startServer() {
     db.questionBank.splice(index, 1);
     saveDB(db);
     res.json({ success: true });
+  });
+
+  // Student Draft Question Submissions endpoints
+  app.get("/api/submissions", (req, res) => {
+    const { studentId } = req.query;
+    db.questionSubmissions = db.questionSubmissions || [];
+    let list = db.questionSubmissions;
+    if (studentId) {
+      list = list.filter(sub => sub.studentId === studentId);
+    }
+    res.json(list);
+  });
+
+  app.post("/api/submissions", (req, res) => {
+    db.questionSubmissions = db.questionSubmissions || [];
+    const items = Array.isArray(req.body) ? req.body : [req.body];
+    const createdItems: StudentQuestionSubmission[] = [];
+
+    for (const item of items) {
+      const { studentId, studentName, text, subject, options, correctAnswer } = item;
+      if (!studentId || !studentName || !text || !subject || !options || correctAnswer === undefined) {
+        return res.status(400).json({ message: "Missing required properties on some questions" });
+      }
+
+      const newSub: StudentQuestionSubmission = {
+        id: "sub-" + Math.random().toString(36).substring(2, 9),
+        studentId,
+        studentName,
+        text,
+        subject,
+        options,
+        correctAnswer: Number(correctAnswer),
+        status: "PENDING",
+        createdAt: new Date().toISOString()
+      };
+
+      db.questionSubmissions.push(newSub);
+      createdItems.push(newSub);
+    }
+
+    saveDB(db);
+    res.status(201).json(createdItems);
+  });
+
+  app.put("/api/submissions/:id", (req, res) => {
+    const { id } = req.params;
+    const { status, adminFeedback } = req.body;
+    db.questionSubmissions = db.questionSubmissions || [];
+
+    const sub = db.questionSubmissions.find(s => s.id === id);
+    if (!sub) {
+      return res.status(404).json({ message: "Submission not found" });
+    }
+
+    if (status) {
+      sub.status = status;
+    }
+    if (adminFeedback !== undefined) {
+      sub.adminFeedback = adminFeedback;
+    }
+
+    // If approved, push to questionBank
+    if (status === "APPROVED") {
+      db.questionBank = db.questionBank || [];
+      const bankItem = {
+        id: "qb-" + Math.random().toString(36).substring(2, 9),
+        text: sub.text,
+        subject: sub.subject,
+        options: sub.options,
+        correctAnswer: sub.correctAnswer
+      };
+      db.questionBank.push(bankItem);
+    }
+
+    saveDB(db);
+    res.json({ success: true, item: sub });
   });
 
   // Assignments / quiz schedules

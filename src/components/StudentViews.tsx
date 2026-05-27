@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   Trophy, BookOpen, Clock, AlertCircle, Calendar, LineChart, 
   ArrowRight, Check, X, ShieldAlert, BadgeInfo, Play, 
-  RotateCcw, Sparkles 
+  RotateCcw, Sparkles, RefreshCw
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { User, Settings, Quiz, Assignment, Attempt, LeaderboardEntry } from "../types";
@@ -21,6 +21,252 @@ export const getSemesterLabel = (sem: string, isShort = false): string => {
   };
   return mapping[sem] || sem;
 };
+
+// ==========================================
+// 0. PERSONALIZED STUDY RECOMMENDATIONS
+// ==========================================
+interface QuizRecommendationsProps {
+  user: User;
+  quizzes: Quiz[];
+  attempts: Attempt[];
+  assignments: Assignment[];
+  onStartQuiz: (quizId: string) => void;
+  subject?: string;
+  isCompact?: boolean;
+  currentQuizId?: string;
+}
+
+export function QuizRecommendations({
+  user,
+  quizzes,
+  attempts,
+  assignments,
+  onStartQuiz,
+  subject,
+  isCompact = false,
+  currentQuizId
+}: QuizRecommendationsProps) {
+  const [createdTime, setCreatedTime] = useState<number | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState<number>(86400); // 24 Hours in seconds
+
+  useEffect(() => {
+    const key = `eduquiz-recomm-created-${user.id}`;
+    let saved = localStorage.getItem(key);
+    let parsedTime = saved ? parseInt(saved, 10) : null;
+
+    if (!parsedTime || isNaN(parsedTime)) {
+      parsedTime = Date.now();
+      localStorage.setItem(key, parsedTime.toString());
+    }
+    setCreatedTime(parsedTime);
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const elapsed = now - (parsedTime || now);
+      const twentyFourHours = 24 * 60 * 60 * 1000;
+      const remainingSecs = Math.max(0, Math.ceil((twentyFourHours - elapsed) / 1000));
+      setSecondsLeft(remainingSecs);
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [user.id, createdTime]);
+
+  const handleRefresh = () => {
+    const key = `eduquiz-recomm-created-${user.id}`;
+    const now = Date.now();
+    localStorage.setItem(key, now.toString());
+    setCreatedTime(now);
+    setSecondsLeft(86400);
+  };
+
+  const isExpired = secondsLeft <= 0;
+
+  const formatCountdown = (totalSecs: number) => {
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const getRecommendedList = (): Quiz[] => {
+    if (isExpired) return [];
+
+    let candidates = quizzes.filter(q => q.status === "PUBLISHED");
+    if (subject) {
+      candidates = candidates.filter(q => q.subject === subject);
+    }
+    if (currentQuizId) {
+      candidates = candidates.filter(q => q.id !== currentQuizId);
+    }
+
+    const sorted = [...candidates].sort((a, b) => {
+      const aAssigned = assignments.some(as => as.quizId === a.id && !as.completedAt) ? 1 : 0;
+      const bAssigned = assignments.some(as => as.quizId === b.id && !as.completedAt) ? 1 : 0;
+      if (aAssigned !== bAssigned) return bAssigned - aAssigned;
+
+      const aFailed = attempts.some(at => at.quizId === a.id && !at.passed) ? 1 : 0;
+      const bFailed = attempts.some(at => at.quizId === b.id && !at.passed) ? 1 : 0;
+      if (aFailed !== bFailed) return bFailed - aFailed;
+
+      const aNoAttempt = !attempts.some(at => at.quizId === a.id) ? 1 : 0;
+      const bNoAttempt = !attempts.some(at => at.quizId === b.id) ? 1 : 0;
+      if (aNoAttempt !== bNoAttempt) return bNoAttempt - aNoAttempt;
+
+      return 0;
+    });
+
+    return sorted.slice(0, 3);
+  };
+
+  const recommendedQuizzes = getRecommendedList();
+
+  if (isCompact) {
+    if (isExpired) {
+      return (
+        <div className="bg-amber-50/40 rounded-2xl p-3 border border-amber-200/50 text-[11px] leading-relaxed text-amber-900 mt-4">
+          <div className="flex items-center gap-1.5 font-bold mb-1">
+            <Sparkles className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+            <span>Recommended Module Quizzes (Expired)</span>
+          </div>
+          <p className="text-[#8C847E]">The 24-hr study guides have expired. Submit or complete your current test to refresh recommendations inside your dashboard.</p>
+        </div>
+      );
+    }
+
+    if (recommendedQuizzes.length === 0) return null;
+
+    return (
+      <div className="bg-[#FAF9F6] rounded-2xl p-3.5 border border-[#EBE7E0] space-y-2 mt-4">
+        <div className="flex items-center justify-between gap-2 border-b border-[#EBE7E0]/60 pb-2">
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-amber-600 shrink-0 animate-pulse" />
+            <span className="text-xs font-bold text-[#2D2A29]">Recommend Upwards Study: {subject?.split(" - ")[0]}</span>
+          </div>
+          <span className="font-mono text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md font-bold shrink-0">
+            ⏳ {formatCountdown(secondsLeft)}
+          </span>
+        </div>
+        <div className="space-y-1.5">
+          {recommendedQuizzes.map(rq => (
+            <div key={rq.id} className="flex items-center justify-between text-[11px] p-2 bg-white rounded-xl border border-[#EBE7E0]/75 hover:border-[#BC8F71]/60 transition-all">
+              <span className="truncate font-medium text-[#433F3E] pr-2 flex-1">{rq.title}</span>
+              <button 
+                onClick={() => onStartQuiz(rq.id)}
+                className="px-2 py-0.5 bg-[#BC8F71]/10 hover:bg-[#BC8F71] text-[#BC8F71] hover:text-white rounded-md font-bold transition-all shrink-0 cursor-pointer"
+              >
+                Fast Try
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-[32px] p-5 sm:p-6 border border-[#EBE7E0] shadow-2xs space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#F3F1ED] pb-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 bg-[#F2EDE7] rounded-xl text-[#BC8F71] shrink-0">
+              <Sparkles className="h-5 w-5 animate-pulse" />
+            </span>
+            <h3 className="font-serif italic text-lg text-[#2D2A29] font-bold">Personalized Study Targets (24-Hour Limits)</h3>
+          </div>
+          <p className="text-xs text-[#8C847E]">
+            We analyzed your homework status to select 3 optimal module handouts requiring urgent review.
+          </p>
+        </div>
+
+        {!isExpired ? (
+          <div className="bg-amber-50 border border-amber-200/50 px-3.5 py-1.5 rounded-2xl flex items-center gap-2 self-start sm:self-auto">
+            <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+            <span className="text-xs font-medium text-[#8C847E]">Remaining:</span>
+            <span className="font-mono text-xs font-bold text-amber-700">{formatCountdown(secondsLeft)}</span>
+          </div>
+        ) : (
+          <button 
+            onClick={handleRefresh}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#BC8F71] hover:bg-[#a67d60] text-white text-xs font-bold rounded-xl transition cursor-pointer self-start sm:self-auto shadow-2xs"
+          >
+            <RefreshCw className="h-3 w-3 shrink-0 animate-spin-reverse" />
+            Refresh Recommendations
+          </button>
+        )}
+      </div>
+
+      {isExpired ? (
+        <div className="text-center py-6 px-4 bg-[#FAF9F6] rounded-2xl border border-dashed border-[#EBE7E0] space-y-3">
+          <span className="text-4xl text-[#BC8F71]/60 block">⏳</span>
+          <div>
+            <h4 className="font-bold text-sm text-[#2D2A29]">Current Recommendations Expired</h4>
+            <p className="text-xs text-[#8C847E] mt-1">
+              Your 24-hr recommendations have been removed. Force regenerate to trigger a clean 24-hr series.
+            </p>
+          </div>
+          <button 
+            onClick={handleRefresh}
+            className="px-4 py-1.5 bg-white border border-[#BC8F71]/40 text-[#BC8F71] hover:bg-[#BC8F71] hover:text-white rounded-lg text-xs font-bold tracking-wider uppercase transition cursor-pointer"
+          >
+            Regenerate Now
+          </button>
+        </div>
+      ) : recommendedQuizzes.length === 0 ? (
+        <div className="text-center py-6 text-[#8C847E] text-xs font-medium bg-[#FAFAF9] rounded-2xl border border-dashed border-[#EBE7E0]">
+          No recommendations available for this module yet. We'll show options as soon as new mock pages are published.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {recommendedQuizzes.map((rq, idx) => {
+            const isCompleted = attempts.some(a => a.quizId === rq.id);
+            const isAssigned = assignments.some(a => a.quizId === rq.id && !a.completedAt);
+            return (
+              <div 
+                key={rq.id} 
+                className="bg-[#FAFAF9] hover:bg-[#F6F5F2] border border-[#EBE7E0] rounded-2xl p-4 flex flex-col justify-between gap-4 transition-all group hover:scale-[1.01]"
+              >
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="px-2 py-0.5 bg-[#EBE7E0]/60 text-[#6B635E] rounded-md font-mono text-[9px] font-bold">
+                      TAG #{idx + 1}
+                    </span>
+                    {isAssigned && !isCompleted && (
+                      <span className="bg-[#BC8F71]/10 text-[#BC8F71] px-1.5 py-0.5 rounded-md text-[9px] font-extrabold tracking-wider font-mono">
+                        ASSIGNED
+                      </span>
+                    )}
+                    {isCompleted && (
+                      <span className="bg-[#E9F0E8] text-[#4A5D46] px-1.5 py-0.5 rounded-md text-[9px] font-extrabold tracking-wider font-mono">
+                        COMPLETED
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="font-bold transition-colors text-xs text-[#2D2A29] line-clamp-2 leading-tight group-hover:text-[#BC8F71]">
+                    {rq.title}
+                  </h4>
+                  <p className="text-[10px] text-[#8C847E]">{rq.subject.split(" - ")[0]}</p>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] pt-3 border-t border-[#EBE7E0]/50 font-sans">
+                  <span className="text-[#8C847E] font-medium">{rq.questionCount || rq.questions?.length || 0} Questions</span>
+                  <button 
+                    onClick={() => onStartQuiz(rq.id)}
+                    className="flex items-center gap-1 font-bold text-[#5A6F56] hover:text-[#4A5D46] cursor-pointer"
+                  >
+                    <span>Start</span>
+                    <Play className="h-2.5 w-2.5 fill-current shrink-0" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ==========================================
 // 1. STUDENT DASHBOARD
@@ -79,7 +325,14 @@ export function StudentDashboard({
             Ready to enhance your scores? Active tasks are waiting for your attention below.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 shrink-0">
+          <button 
+            onClick={() => onNavigate("student-submissions")}
+            className="px-5 py-2.5 bg-white border border-[#BC8F71]/40 text-[#BC8F71] hover:bg-[#BC8F71]/5 text-xs font-semibold rounded-2xl transition cursor-pointer flex items-center gap-1.5"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Co-Author Questions
+          </button>
           <button 
             onClick={() => onNavigate("student-quiz-list")}
             className="px-5 py-2.5 bg-[#5A6F56] text-white hover:bg-[#4A5D46] text-xs font-semibold rounded-2xl transition shadow-xs cursor-pointer flex items-center gap-1.5"
@@ -89,6 +342,26 @@ export function StudentDashboard({
           </button>
         </div>
       </div>
+
+      {user.isGuest && (
+        <div className="bg-amber-50 border border-amber-200 rounded-[24px] p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-amber-100 text-amber-800 rounded-md text-[10px] font-bold font-mono uppercase">
+              ⚠️ GUEST MODE ACTIVE
+            </span>
+            <h3 className="font-bold text-sm text-[#2D2A29] font-serif italic">Your progress is saved locally to your browser only!</h3>
+            <p className="text-xs text-slate-600">
+              Your scores won't appear on the public school leaderboard until your account is upgraded. Contact your administrator or educator to obtain an active **Verification Code**.
+            </p>
+          </div>
+          <button
+            onClick={() => onNavigate("student-profile")}
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl transition cursor-pointer whitespace-nowrap"
+          >
+            Promote Account 🌟
+          </button>
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-3 gap-2 sm:gap-6 animate-fade-in">
@@ -285,6 +558,7 @@ interface QuizListProps {
   attempts: Attempt[];
   assignments: Assignment[];
   onStartQuiz: (quizId: string) => void;
+  user: User;
 }
 
 export function StudentQuizList({
@@ -292,7 +566,8 @@ export function StudentQuizList({
   quizzes,
   attempts,
   assignments,
-  onStartQuiz
+  onStartQuiz,
+  user
 }: QuizListProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<"ACTIVE_TERM" | "ARCHIVED">("ACTIVE_TERM");
@@ -544,114 +819,117 @@ export function StudentQuizList({
         )
       ) : (
         /* Selected Module View: Inner Quizzes (e.g. 04_Handout_1A.pdf) */
-        currentFilteredQuizzes.length === 0 ? (
-          <div className="bg-white rounded-[32px] border border-[#EBE7E0] p-16 text-center">
-            <p className="text-4xl">📚</p>
-            <h3 className="font-bold text-base text-[#2D2A29] mt-4">No quizzes or handouts yet</h3>
-            <p className="text-xs text-[#8C847E] mt-1 max-w-sm mx-auto">
-              There are currently no active exams or handout files matching this criteria.
-            </p>
-            <button 
-              onClick={() => setSelectedModule(null)}
-              className="mt-6 px-5 py-2.5 bg-[#5A6F56] hover:bg-[#4A5D46] text-white text-xs font-bold rounded-xl shadow-xs transition"
-            >
-              Back to Modules
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {currentFilteredQuizzes.map((quiz) => {
-              const completedAttempt = attempts.find(at => at.quizId === quiz.id);
-              const isAssigned = assignments.some(a => a.quizId === quiz.id && !a.completedAt);
-              const isLocked = activeTab === "ARCHIVED";
+        <div className="space-y-6">
 
-              return (
-                <div 
-                  key={quiz.id} 
-                  className={`bg-white rounded-[32px] border transition-all duration-200 shadow-2xs hover:shadow-xs flex flex-col justify-between overflow-hidden relative ${
-                    isLocked ? "border-[#EBE7E0] opacity-90" : "border-[#EBE7E0] hover:border-[#5A6F56]"
-                  }`}
-                >
-                  {/* Visual Semester Tag ribbon */}
-                  <span className="absolute top-4 right-4 text-[9px] font-black tracking-widest text-[#5A6F56] border border-[#5A6F56]/15 bg-[#DDE4DC] px-2.5 py-0.5 rounded-full uppercase">
-                    {getSemesterLabel(quiz.semester, true)}
-                  </span>
+          {currentFilteredQuizzes.length === 0 ? (
+            <div className="bg-white rounded-[32px] border border-[#EBE7E0] p-16 text-center">
+              <p className="text-4xl">📚</p>
+              <h3 className="font-bold text-base text-[#2D2A29] mt-4">No quizzes or handouts yet</h3>
+              <p className="text-xs text-[#8C847E] mt-1 max-w-sm mx-auto">
+                There are currently no active exams or handout files matching this criteria.
+              </p>
+              <button 
+                onClick={() => setSelectedModule(null)}
+                className="mt-6 px-5 py-2.5 bg-[#5A6F56] hover:bg-[#4A5D46] text-white text-xs font-bold rounded-xl shadow-xs transition"
+              >
+                Back to Modules
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {currentFilteredQuizzes.map((quiz) => {
+                const completedAttempt = attempts.find(at => at.quizId === quiz.id);
+                const isAssigned = assignments.some(a => a.quizId === quiz.id && !a.completedAt);
+                const isLocked = activeTab === "ARCHIVED";
 
-                  <div className="p-6 space-y-4">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-semibold px-2.5 py-1 rounded-md text-[#BC8F71] bg-[#F2EDE7] uppercase font-mono">
-                        Handout Questions
-                      </span>
-                    </div>
+                return (
+                  <div 
+                    key={quiz.id} 
+                    className={`bg-white rounded-[32px] border transition-all duration-200 shadow-2xs hover:shadow-xs flex flex-col justify-between overflow-hidden relative ${
+                      isLocked ? "border-[#EBE7E0] opacity-90" : "border-[#EBE7E0] hover:border-[#5A6F56]"
+                    }`}
+                  >
+                    {/* Visual Semester Tag ribbon */}
+                    <span className="absolute top-4 right-4 text-[9px] font-black tracking-widest text-[#5A6F56] border border-[#5A6F56]/15 bg-[#DDE4DC] px-2.5 py-0.5 rounded-full uppercase">
+                      {getSemesterLabel(quiz.semester, true)}
+                    </span>
 
-                    <div className="space-y-1.5">
-                      <h3 className="font-bold text-[#2D2A29] text-base leading-snug line-clamp-2">
-                        {quiz.title}
-                      </h3>
-                      <p className="text-xs text-[#8C847E] leading-relaxed line-clamp-3">
-                        {quiz.description || "Comprehensive syllabus evaluation. Tests structural core objectives."}
-                      </p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 pt-3 border-t border-[#F3F1ED] text-xs text-[#6B635E] font-medium">
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-[#BC8F71]" />
-                        <span>{quiz.timeLimit} Minutes</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <BookOpen className="w-3.5 h-3.5 text-[#5A6F56]" />
-                        <span>{quiz.questionCount || 5} Questions</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="p-6 bg-[#F9F8F6] border-t border-[#EBE7E0] flex items-center justify-between">
-                    {completedAttempt ? (
-                      <div className="text-left">
-                        <p className="text-[10px] text-[#8C847E] font-bold uppercase tracking-wider font-mono">My Result</p>
-                        <span className={`text-sm font-black font-mono ${
-                          completedAttempt.passed ? "text-[#5A6F56]" : "text-rose-600"
-                        }`}>
-                          {completedAttempt.score} / {completedAttempt.total} ({Math.round(completedAttempt.score/completedAttempt.total*100)}%)
+                    <div className="p-6 space-y-4">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs font-semibold px-2.5 py-1 rounded-md text-[#BC8F71] bg-[#F2EDE7] uppercase font-mono">
+                          Handout Questions
                         </span>
                       </div>
-                    ) : isAssigned ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-800 font-bold px-2.5 py-1 rounded-full border border-amber-200">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-ping"></span>
-                        Assigned Exam
-                      </span>
-                    ) : (
-                      <span className="text-[10px] text-[#8C847E] font-medium italic">Self Enrollable</span>
-                    )}
 
-                    {isLocked ? (
-                      <div className="text-right">
-                        <span className="text-[10px] font-bold text-[#BC8F71] uppercase tracking-wider leading-none">
-                          Locked Archive
-                        </span>
-                        <p className="text-[9px] text-[#8C847E] mt-0.5">Read-Only mode</p>
+                      <div className="space-y-1.5">
+                        <h3 className="font-bold text-[#2D2A29] text-base leading-snug line-clamp-2">
+                          {quiz.title}
+                        </h3>
+                        <p className="text-xs text-[#8C847E] leading-relaxed line-clamp-3">
+                          {quiz.description || "Comprehensive syllabus evaluation. Tests structural core objectives."}
+                        </p>
                       </div>
-                    ) : completedAttempt ? (
-                      <button
-                        onClick={() => onStartQuiz(quiz.id)}
-                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center gap-1"
-                      >
-                        <RotateCcw className="h-3 w-3" /> Retake
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => onStartQuiz(quiz.id)}
-                        className="px-5 py-2.5 bg-[#5A6F56] hover:bg-[#4A5D46] text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
-                      >
-                        Start Attempt
-                      </button>
-                    )}
+
+                      <div className="grid grid-cols-2 gap-3 pt-3 border-t border-[#F3F1ED] text-xs text-[#6B635E] font-medium">
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-[#BC8F71]" />
+                          <span>{quiz.timeLimit} Minutes</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <BookOpen className="w-3.5 h-3.5 text-[#5A6F56]" />
+                          <span>{quiz.questionCount || 5} Questions</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-[#F9F8F6] border-t border-[#EBE7E0] flex items-center justify-between">
+                      {completedAttempt ? (
+                        <div className="text-left">
+                          <p className="text-[10px] text-[#8C847E] font-bold uppercase tracking-wider font-mono">My Result</p>
+                          <span className={`text-sm font-black font-mono ${
+                            completedAttempt.passed ? "text-[#5A6F56]" : "text-rose-600"
+                          }`}>
+                            {completedAttempt.score} / {completedAttempt.total} ({Math.round(completedAttempt.score/completedAttempt.total*100)}%)
+                          </span>
+                        </div>
+                      ) : isAssigned ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-amber-50 text-amber-800 font-bold px-2.5 py-1 rounded-full border border-amber-200">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-ping"></span>
+                          Assigned Exam
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-[#8C847E] font-medium italic">Self Enrollable</span>
+                      )}
+
+                      {isLocked ? (
+                        <div className="text-right">
+                          <span className="text-[10px] font-bold text-[#BC8F71] uppercase tracking-wider leading-none">
+                            Locked Archive
+                          </span>
+                          <p className="text-[9px] text-[#8C847E] mt-0.5">Read-Only mode</p>
+                        </div>
+                      ) : completedAttempt ? (
+                        <button
+                          onClick={() => onStartQuiz(quiz.id)}
+                          className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center gap-1"
+                        >
+                          <RotateCcw className="h-3 w-3" /> Retake
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => onStartQuiz(quiz.id)}
+                          className="px-5 py-2.5 bg-[#5A6F56] hover:bg-[#4A5D46] text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                        >
+                          Start Attempt
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -665,12 +943,22 @@ interface QuizTakingProps {
   quiz: Quiz;
   onCancel: () => void;
   onSubmitAttempt: (answers: Record<string, number>) => void;
+  allQuizzes?: Quiz[];
+  attempts?: Attempt[];
+  onStartQuiz?: (quizId: string) => void;
+  user?: User;
+  assignments?: Assignment[];
 }
 
 export function StudentQuizTaking({
   quiz,
   onCancel,
-  onSubmitAttempt
+  onSubmitAttempt,
+  allQuizzes = [],
+  attempts = [],
+  onStartQuiz,
+  user,
+  assignments = []
 }: QuizTakingProps) {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState<Record<string, number>>({});
@@ -798,30 +1086,30 @@ export function StudentQuizTaking({
   }
 
   return (
-    <div className="max-w-3xl mx-auto py-2 space-y-6 font-sans">
+    <div className="max-w-3xl mx-auto py-2 px-1.5 sm:px-4 space-y-4 sm:space-y-6 font-sans">
       {/* Header controls & stats */}
-      <div className="bg-white p-5 rounded-[28px] border border-[#EBE7E0] shadow-2xs flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-        <div className="min-w-0 max-w-full">
-          <span className="text-[10px] font-bold tracking-widest text-[#BC8F71] uppercase">{quiz.subject} Term Test</span>
-          <h2 className="text-base font-bold text-[#2D2A29] truncate max-w-full sm:max-w-md mt-0.5">{quiz.title}</h2>
+      <div className="bg-white p-3.5 sm:p-5 rounded-2xl sm:rounded-[28px] border border-[#EBE7E0] shadow-2xs flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <span className="text-[9px] sm:text-[10px] font-bold tracking-widest text-[#BC8F71] uppercase block truncate">{quiz.subject} Term Test</span>
+          <h2 className="text-xs sm:text-base font-bold text-[#2D2A29] truncate mt-0.5">{quiz.title}</h2>
         </div>
 
         {/* Counter Display Clock */}
-        <div className={`p-3 rounded-2xl flex items-center gap-2 border font-mono text-sm font-bold shrink-0 ${
-          timeLeft < 60 ? "bg-rose-50 border-rose-200 text-rose-700 animate-ping" : "bg-[#F3F1ED] border-[#D9D3C7]"
+        <div className={`py-1.5 px-2.5 sm:p-3 rounded-xl sm:rounded-2xl flex items-center gap-1.5 sm:gap-2 border font-mono text-xs sm:text-sm font-bold shrink-0 ${
+          timeLeft < 60 ? "bg-rose-50 border-rose-200 text-rose-700 animate-pulse" : "bg-[#F3F1ED] border-[#D9D3C7]"
         }`}>
-          <Clock className="h-4 w-4 shrink-0" />
+          <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
           <span>{formatTime(timeLeft)}</span>
         </div>
       </div>
 
       {/* Progress timeline */}
-      <div className="space-y-2">
-        <div className="flex justify-between items-center text-xs text-[#8C847E] font-medium">
+      <div className="space-y-1.5 sm:space-y-2 px-1">
+        <div className="flex justify-between items-center text-[10.5px] sm:text-xs text-[#8C847E] font-medium">
           <span>Question Progress</span>
           <span className="font-bold text-[#2D2A29]">Question {currentIdx + 1} of {questions.length}</span>
         </div>
-        <div className="w-full bg-[#EBE7E0] h-2.5 rounded-full overflow-hidden">
+        <div className="w-full bg-[#EBE7E0] h-1.5 sm:h-2.5 rounded-full overflow-hidden">
           <div 
             className="bg-[#5A6F56] h-full transition-all duration-300"
             style={{ width: `${progressPercent}%` }}
@@ -837,19 +1125,19 @@ export function StudentQuizTaking({
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -direction * 50 }}
           transition={{ duration: 0.35, ease: "easeInOut" }}
-          className="bg-white p-6 sm:p-8 rounded-[36px] border border-[#EBE7E0] shadow-xs space-y-6"
+          className="bg-white p-4.5 sm:p-8 rounded-[24px] sm:rounded-[36px] border border-[#EBE7E0] shadow-xs space-y-4 sm:space-y-6"
         >
-          <div className="space-y-4">
-            <span className="px-3 py-1 bg-[#DDE4DC] text-[#4A5D46] rounded-md text-[10px] font-extrabold uppercase font-mono">
+          <div className="space-y-2.5 sm:space-y-4">
+            <span className="px-2.5 py-1 bg-[#DDE4DC] text-[#4A5D46] rounded-md text-[9px] sm:text-[10px] font-extrabold uppercase font-mono inline-block">
               Question #{currentIdx + 1}
             </span>
-            <h3 className="text-[#2D2A29] text-base sm:text-lg font-bold leading-relaxed">
+            <h3 className="text-[#2D2A29] text-sm sm:text-lg font-bold leading-relaxed">
               {currentQuestion.text}
             </h3>
           </div>
 
           {/* Option targets (touch friendly 44px min!) */}
-          <div className="grid grid-cols-1 gap-3 pt-2">
+          <div className="grid grid-cols-1 gap-2.5 sm:gap-3 pt-1 sm:pt-2">
             {currentQuestion.options.map((option, optIdx) => {
               const isSelected = selectedOption === optIdx;
               const isCorrect = optIdx === currentQuestion.correctAnswer;
@@ -868,7 +1156,7 @@ export function StudentQuizTaking({
                   btnClass = "bg-[#F2EDE7] text-[#2D2A29] border-[#BC8F71] shadow-md scale-[1.01] animate-pulse";
                   badgeClass = "bg-[#BC8F71] text-white";
                   rightSideSvg = (
-                    <span className="h-4 w-4 rounded-full border-2 border-[#BC8F71] border-t-transparent animate-spin shrink-0" />
+                    <span className="h-3.5 w-3.5 sm:h-4 sm:w-4 rounded-full border-2 border-[#BC8F71] border-t-transparent animate-spin shrink-0" />
                   );
                 } else {
                   btnClass = "bg-[#F9F8F6] text-[#433F3E] border-[#EBE7E0] opacity-40 pointer-events-none";
@@ -881,8 +1169,8 @@ export function StudentQuizTaking({
                   btnClass = "bg-[#E9F0E8] text-[#4A5D46] border-[#5A6F56] font-semibold";
                   badgeClass = "bg-[#5A6F56] text-white";
                   rightSideSvg = (
-                    <span className="flex items-center gap-1 bg-[#5A6F56] text-white text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md shadow-xs shrink-0 font-mono">
-                      <Check className="h-3 w-3" /> Correct
+                    <span className="flex items-center gap-1 bg-[#5A6F56] text-white text-[9px] sm:text-[10px] font-bold uppercase tracking-wider px-1.5 sm:px-2 py-0.5 rounded-md shadow-xs shrink-0 font-mono">
+                      <Check className="h-2.5 w-2.5 sm:h-3 sm:w-3" /> Correct
                     </span>
                   );
                 } else if (isSelected && !isCorrect) {
@@ -890,8 +1178,8 @@ export function StudentQuizTaking({
                   btnClass = "bg-rose-50 text-rose-700 border-rose-300 font-semibold";
                   badgeClass = "bg-rose-600 text-white";
                   rightSideSvg = (
-                    <span className="flex items-center gap-1 bg-rose-600 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md shadow-xs shrink-0 font-mono">
-                      <X className="h-3 w-3" /> Wrong
+                    <span className="flex items-center gap-1 bg-rose-600 text-white text-[9px] sm:text-[10px] font-bold uppercase tracking-wider px-1.5 sm:px-2 py-0.5 rounded-md shadow-xs shrink-0 font-mono">
+                      <X className="h-2.5 w-2.5 sm:h-3 sm:w-3" /> Wrong
                     </span>
                   );
                 } else {
@@ -909,15 +1197,15 @@ export function StudentQuizTaking({
                   whileHover={!isLocked ? { scale: 1.008, x: 2 } : {}}
                   whileTap={!isLocked ? { scale: 0.992 } : {}}
                   transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                  className={`w-full text-left p-4 rounded-2xl border transition-all flex items-center justify-between min-h-[52px] select-none cursor-pointer ${btnClass}`}
+                  className={`w-full text-left p-3 sm:p-4 rounded-xl sm:rounded-2xl border transition-all flex items-center justify-between gap-3 min-h-[46px] sm:min-h-[52px] select-none cursor-pointer ${btnClass}`}
                 >
-                  <div className="flex items-center gap-3">
-                    <span className={`h-8 w-8 rounded-xl font-mono font-bold text-xs flex items-center justify-center shrink-0 transition-colors ${badgeClass}`}>
+                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                    <span className={`h-7 w-7 sm:h-8 sm:w-8 rounded-lg sm:rounded-xl font-mono font-bold text-[11px] sm:text-xs flex items-center justify-center shrink-0 transition-colors ${badgeClass}`}>
                       {["A", "B", "C", "D"][optIdx] || optIdx + 1}
                     </span>
-                    <span className="text-xs sm:text-sm font-semibold">{option}</span>
+                    <span className="text-[11.5px] sm:text-sm font-semibold break-words flex-1 min-w-0">{option}</span>
                   </div>
-                  {rightSideSvg}
+                  {rightSideSvg && <div className="shrink-0 ml-1">{rightSideSvg}</div>}
                 </motion.button>
               );
             })}
@@ -926,20 +1214,20 @@ export function StudentQuizTaking({
       </AnimatePresence>
 
       {/* Navigation Controls */}
-      <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between pt-2">
+      <div className="flex items-center justify-between gap-3 pt-2">
         <button
           onClick={() => setShowExitConfirm(true)}
-          className="px-4 py-2.5 bg-[#F2EDE7] hover:bg-[#EBE7E0] text-[#6B635E] rounded-xl text-xs font-bold transition cursor-pointer text-center"
+          className="px-3 sm:px-4 py-2 sm:py-2.5 bg-[#F2EDE7] hover:bg-[#EBE7E0] text-[#6B635E] rounded-xl text-[11px] sm:text-xs font-bold transition cursor-pointer text-center whitespace-nowrap"
         >
-          Cancel Session
+          Cancel<span className="hidden sm:inline"> Session</span>
         </button>
 
-        <div className="flex gap-2 justify-end">
+        <div className="flex items-center gap-2">
           {currentIdx > 0 && (
             <button
               onClick={handlePrev}
               disabled={isLocked && !isRevealed}
-              className="flex-1 sm:flex-none px-4 py-2.5 bg-white border border-[#EBE7E0] hover:bg-[#F9F8F6] text-[#2D2A29] rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+              className="px-3 sm:px-4 py-2 sm:py-2.5 bg-white border border-[#EBE7E0] hover:bg-[#F9F8F6] text-[#2D2A29] rounded-xl text-[11px] sm:text-xs font-bold transition cursor-pointer disabled:opacity-50 whitespace-nowrap"
             >
               Previous
             </button>
@@ -949,18 +1237,18 @@ export function StudentQuizTaking({
             <button
               onClick={handleNext}
               disabled={isLocked && !isRevealed}
-              className="flex-1 sm:flex-none px-5 py-2.5 bg-[#BC8F71] hover:bg-[#a67d60] text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50"
+              className="px-4 sm:px-5 py-2 sm:py-2.5 bg-[#BC8F71] hover:bg-[#a67d60] text-white rounded-xl text-[11px] sm:text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 whitespace-nowrap"
             >
-              Next Question
+              Next<span className="hidden sm:inline"> Question</span>
             </button>
           ) : (
             <button
               id="btn-quiz-submit"
               onClick={() => onSubmitAttempt(answers)}
               disabled={isLocked && !isRevealed}
-              className="flex-1 sm:flex-none px-6 py-2.5 bg-[#5A6F56] hover:bg-[#4A5D46] text-white rounded-xl text-xs font-extrabold shadow-sm tracking-wide uppercase transition cursor-pointer whitespace-nowrap disabled:opacity-50"
+              className="px-4 sm:px-6 py-2 sm:py-2.5 bg-[#5A6F56] hover:bg-[#4A5D46] text-white rounded-xl text-[11px] sm:text-xs font-extrabold shadow-sm tracking-wide uppercase transition cursor-pointer whitespace-nowrap disabled:opacity-50"
             >
-              {isLocked ? "Recording Attempt..." : "Submit Examination"}
+              {isLocked ? "Submitting..." : <>Submit<span className="hidden sm:inline"> Examination</span></>}
             </button>
           )}
         </div>

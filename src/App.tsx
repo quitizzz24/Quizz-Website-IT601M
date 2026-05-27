@@ -3,9 +3,9 @@ import {
   Trophy, BookOpen, Clock, AlertTriangle, ShieldCheck, Mail, LogIn, 
   UserPlus, User as UserIcon, Calendar, BarChart2, Shield, Settings as SettingsIcon,
   ChevronRight, AlignJustify, X, GraduationCap, Compass, FileSpreadsheet, Lock, Check,
-  Home
+  Home, FileQuestion
 } from "lucide-react";
-import { User, Settings, Quiz, Assignment, Attempt, Question, QuestionBankItem, LeaderboardEntry } from "./types";
+import { User, Settings, Quiz, Assignment, Attempt, Question, QuestionBankItem, LeaderboardEntry, StudentQuestionSubmission } from "./types";
 import { Navbar } from "./components/Navbar";
 import { LandingPage } from "./components/LandingPage";
 import { Toast, ToastMessage } from "./components/Toast";
@@ -16,6 +16,8 @@ import {
   AdminDashboard, AdminStudents, AdminQuizzes, AdminQuizEditor, AdminQuestionBank, AdminAssignQuizzes, AdminReports, AdminLeaderboard, AdminSettings 
 } from "./components/AdminViews";
 import { AdminSupabaseSync } from "./components/AdminSupabaseSync";
+import { StudentSubmissionsView, AdminSubmissionsView } from "./components/SubmissionsViews";
+import { StudentPendingApproval } from "./components/StudentPendingApproval";
 
 const renderAvatar = (avatarUrl: string | undefined, sizeClass: string = "h-8 w-8", extraStyle: string = "ring-2 ring-slate-100") => {
   if (avatarUrl && avatarUrl.trim() !== "") {
@@ -66,6 +68,34 @@ export default function App() {
   const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [submissions, setSubmissions] = useState<StudentQuestionSubmission[]>([]);
+  const [verificationCodes, setVerificationCodes] = useState<string[]>([]);
+  const [signUpVerificationCode, setSignUpVerificationCode] = useState("");
+  const [upgradeVerificationCode, setUpgradeVerificationCode] = useState("");
+  const [copiedCodeAdmin, setCopiedCodeAdmin] = useState<string | null>(null);
+  const [lastGeneratedKey, setLastGeneratedKey] = useState<string | null>(null);
+  const [lastGeneratedType, setLastGeneratedType] = useState<"student" | "admin" | null>(null);
+  const [copiedNotification, setCopiedNotification] = useState<boolean>(false);
+
+  // Custom Iframe-Safe Confirmation overlay states
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  const handleCustomConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmDialog(null);
+      }
+    });
+  };
 
   // Selection references
   const [activeQuizId, setActiveQuizId] = useState<string | null>(null);
@@ -75,13 +105,26 @@ export default function App() {
   // Mobile menu open
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  const fetchVerificationCodesSilently = async () => {
+    try {
+      const res = await fetch("/api/admin/verification-codes");
+      if (res.ok) {
+        const data = await res.json();
+        setVerificationCodes(data);
+      }
+    } catch {
+      // Quiet fail
+    }
+  };
+
   // Load Initial Configuration and settings
   useEffect(() => {
     fetchSettings();
+    fetchVerificationCodesSilently();
     if (user) {
       refreshData();
     }
-  }, [user]);
+  }, [user, view]);
 
   const showToast = (text: string, type: "success" | "error" | "warning" = "success") => {
     const newToast: ToastMessage = {
@@ -149,19 +192,52 @@ export default function App() {
           const attData = await attRes.json();
           setAttempts(attData);
         }
-      } else {
-        // 6. User Specific Assignments (student only)
-        const assignRes = await fetch(`/api/assignments?studentId=${user.id}`);
-        if (assignRes.ok) {
-          const assignData = await assignRes.json();
-          setAssignments(assignData);
+
+        // 5.5. All Student Submissions (admin only)
+        const subRes = await fetch("/api/submissions");
+        if (subRes.ok) {
+          const subData = await subRes.json();
+          setSubmissions(subData);
         }
 
-        // 7. User Specific Attempts (student only)
-        const studentAttRes = await fetch(`/api/attempts?studentId=${user.id}`);
-        if (studentAttRes.ok) {
-          const studentAttData = await studentAttRes.json();
-          setAttempts(studentAttData);
+        // 5.6. Verification Codes (admin only)
+        const vcRes = await fetch("/api/admin/verification-codes");
+        if (vcRes.ok) {
+          const vcData = await vcRes.json();
+          setVerificationCodes(vcData);
+        }
+      } else {
+        if (user.isGuest) {
+          const guestAttemptsKey = `eduquiz-guest-attempts-${user.id}`;
+          const localAtt = localStorage.getItem(guestAttemptsKey);
+          if (localAtt) {
+            setAttempts(JSON.parse(localAtt));
+          } else {
+            setAttempts([]);
+          }
+          setAssignments([]);
+          setSubmissions([]);
+        } else {
+          // 6. User Specific Assignments (student only)
+          const assignRes = await fetch(`/api/assignments?studentId=${user.id}`);
+          if (assignRes.ok) {
+            const assignData = await assignRes.json();
+            setAssignments(assignData);
+          }
+
+          // 7. User Specific Attempts (student only)
+          const studentAttRes = await fetch(`/api/attempts?studentId=${user.id}`);
+          if (studentAttRes.ok) {
+            const studentAttData = await studentAttRes.json();
+            setAttempts(studentAttData);
+          }
+
+          // 7.5. Student Specific Submissions (student only)
+          const studentSubRes = await fetch(`/api/submissions?studentId=${user.id}`);
+          if (studentSubRes.ok) {
+            const studentSubData = await studentSubRes.json();
+            setSubmissions(studentSubData);
+          }
         }
       }
     } catch {
@@ -208,6 +284,7 @@ export default function App() {
     const name = data.get("name") as string;
     const email = data.get("email") as string;
     const password = data.get("password") as string;
+    const verificationCode = (data.get("verificationCode") || "") as string;
 
     if (!name || !email || !password) {
       showToast("All fields are required to register your account", "error");
@@ -218,13 +295,14 @@ export default function App() {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password })
+        body: JSON.stringify({ name, email, password, verificationCode })
       });
       const responseData = await res.json();
       if (res.ok) {
         const loggedUser = responseData.user;
         setUser(loggedUser);
         localStorage.setItem("eduquiz-student-user", JSON.stringify(loggedUser));
+        
         showToast("Roster self-registration completed successfully!", "success");
         setView("student-dashboard");
       } else {
@@ -232,6 +310,130 @@ export default function App() {
       }
     } catch {
       showToast("Network failure. Retry registration.", "error");
+    }
+  };
+
+  const handleContinueAsGuest = () => {
+    triggerNavigate("signup");
+    showToast("Join instantly! Fill in your Name, Email, and Password. No verification code is required to access your student profile!", "success");
+  };
+
+  const handleUpgradeGuest = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!user || !user.isGuest) return;
+
+    const data = new FormData(e.currentTarget);
+    const name = data.get("name") as string;
+    const email = data.get("email") as string;
+    const password = data.get("password") as string;
+    const verificationCode = data.get("verificationCode") as string;
+
+    if (!name || !email || !password) {
+      showToast("Name, email, and password are required.", "error");
+      return;
+    }
+
+    try {
+      // Get guest attempts from local storage to upload and sync
+      const guestAttemptsKey = `eduquiz-guest-attempts-${user.id}`;
+      const savedLocal = localStorage.getItem(guestAttemptsKey);
+      const attemptsList = savedLocal ? JSON.parse(savedLocal) : [];
+
+      const res = await fetch("/api/auth/upgrade-guest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          email,
+          password,
+          verificationCode: verificationCode || "",
+          attempts: attemptsList
+        })
+      });
+
+      const responseData = await res.json();
+      if (res.ok) {
+        const upgradedUser = responseData.user;
+        setUser(upgradedUser);
+        localStorage.setItem("eduquiz-student-user", JSON.stringify(upgradedUser));
+        
+        // Wipe local guest attempts since they're uploaded now
+        localStorage.removeItem(guestAttemptsKey);
+
+        showToast("Success! Your temporary guest account is now fully active!", "success");
+        setView("student-dashboard");
+      } else {
+        showToast(responseData.message || "Invalid or expired Admin Verification Code", "error");
+      }
+    } catch {
+      showToast("Connection failure registering guest account", "error");
+    }
+  };
+
+  const handleGenerateVerificationCode = async (type: "student" | "admin" = "student") => {
+    try {
+      const res = await fetch("/api/admin/verification-codes", {
+        method: "POST"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const code = data.code;
+        
+        // Save to active states
+        setLastGeneratedKey(code);
+        setLastGeneratedType(type);
+        setCopiedNotification(true);
+        setTimeout(() => setCopiedNotification(false), 2500);
+
+        // Auto copy to clipboard instantly!
+        try {
+          await navigator.clipboard.writeText(code);
+        } catch (clipErr) {
+          console.warn("Clipboard auto-copy failed", clipErr);
+        }
+
+        await refreshData();
+      }
+    } catch {
+      showToast("Could not generate code", "error");
+    }
+  };
+
+  const handleDeleteVerificationCode = async (code: string) => {
+    try {
+      const res = await fetch(`/api/admin/verification-codes/${code}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        showToast("Deleted verification code successfully", "success");
+        await refreshData();
+      }
+    } catch {
+      showToast("Could not delete code", "error");
+    }
+  };
+
+  const handleClearVerificationCodes = async () => {
+    // Optimistic state update for instant, lag-free UI reaction in iframe
+    setVerificationCodes([]);
+    try {
+      const res = await fetch("/api/admin/verification-codes", {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        showToast("Cleared all active unused keys", "success");
+        await refreshData();
+      } else {
+        showToast("Could not clear keys", "error");
+        // Rollback on failure
+        const vcRes = await fetch("/api/admin/verification-codes");
+        if (vcRes.ok) {
+          const vcData = await vcRes.json();
+          setVerificationCodes(vcData);
+        }
+      }
+    } catch {
+      showToast("Could not clear keys", "error");
     }
   };
 
@@ -300,6 +502,59 @@ export default function App() {
 
   const onSubmitAttempt = async (userAnswers: Record<string, number>) => {
     if (!user || !activeQuizId) return;
+
+    if (user.isGuest) {
+      const targetQuiz = quizzes.find(q => q.id === activeQuizId);
+      const quizQuestions = targetQuiz?.questions || [];
+
+      let score = 0;
+      quizQuestions.forEach((q) => {
+        const studentAnsIdx = userAnswers[q.id];
+        if (studentAnsIdx !== undefined && Number(studentAnsIdx) === q.correctAnswer) {
+          score++;
+        }
+      });
+      const total = quizQuestions.length;
+      const percent = total > 0 ? (score / total) * 100 : 0;
+      const passed = percent >= 60;
+
+      const newAttempt: Attempt = {
+        id: "at-guest-" + Math.random().toString(36).substring(2, 9),
+        quizId: activeQuizId,
+        studentId: user.id,
+        score,
+        total,
+        passed,
+        answers: userAnswers,
+        createdAt: new Date().toISOString(),
+        quizTitle: targetQuiz ? targetQuiz.title : "Archived Quiz",
+        quizSubject: targetQuiz ? targetQuiz.subject : "Unsorted",
+        quizSemester: targetQuiz ? targetQuiz.semester : "MIDTERM",
+        studentName: user.name,
+      };
+
+      const guestAttemptsKey = `eduquiz-guest-attempts-${user.id}`;
+      const savedLocal = localStorage.getItem(guestAttemptsKey);
+      const guestAttemptsList: Attempt[] = savedLocal ? JSON.parse(savedLocal) : [];
+      guestAttemptsList.unshift(newAttempt);
+      localStorage.setItem(guestAttemptsKey, JSON.stringify(guestAttemptsList));
+
+      setAttempts(guestAttemptsList);
+
+      if (passed) {
+        user.streak = (user.streak || 0) + 1;
+      } else {
+        user.streak = 0;
+      }
+      setUser({ ...user });
+      localStorage.setItem("eduquiz-student-user", JSON.stringify(user));
+
+      setActiveAttemptId(newAttempt.id);
+      showToast(`[Guest Mode] Attempt logged locally: Scored ${score}/${total}.`, "success");
+      setView("student-results");
+      return;
+    }
+
     try {
       const res = await fetch("/api/attempts", {
         method: "POST",
@@ -334,6 +589,19 @@ export default function App() {
     const email = data.get("email") as string;
     const password = data.get("password") as string;
 
+    if (user.isGuest) {
+      const updatedGuest: User = {
+        ...user,
+        name: name || user.name,
+        email: email || user.email,
+        createdAt: user.createdAt
+      };
+      setUser(updatedGuest);
+      localStorage.setItem("eduquiz-student-user", JSON.stringify(updatedGuest));
+      showToast("Guest profile updated locally!", "success");
+      return;
+    }
+
     try {
       const res = await fetch("/api/users/profile", {
         method: "POST",
@@ -360,6 +628,28 @@ export default function App() {
   };
 
   // Admin Actions
+  const onCreateStudent = async (payload: any) => {
+    try {
+      const res = await fetch("/api/students", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast("Student created cleanly in database.", "success");
+        await refreshData();
+        return true;
+      } else {
+        showToast(data.message || "Could not create student profile.", "error");
+        return false;
+      }
+    } catch {
+      showToast("Creation timeout", "error");
+      return false;
+    }
+  };
+
   const onUpdateStudent = async (id: string, payload: any) => {
     try {
       const res = await fetch(`/api/students/${id}`, {
@@ -379,16 +669,37 @@ export default function App() {
   };
 
   const onDeleteStudent = async (id: string) => {
-    const isConfirmed = window.confirm("Are you sure you want to terminate this student's registration? This removes all their history attempts.");
-    if (!isConfirmed) return;
+    handleCustomConfirm(
+      "Terminate Student Registration",
+      "Are you sure you want to terminate this student's registration? This removes all their history attempts.",
+      async () => {
+        try {
+          const res = await fetch(`/api/students/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            showToast("Student profile purged from directories.", "success");
+            await refreshData();
+          }
+        } catch {
+          showToast("Purge timeout", "error");
+        }
+      }
+    );
+  };
+
+  const onApproveStudent = async (id: string) => {
     try {
-      const res = await fetch(`/api/students/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/students/${id}/approve`, {
+        method: "POST"
+      });
       if (res.ok) {
-        showToast("Student profile purged from directories.", "success");
+        showToast("Student account approved and activated!", "success");
         await refreshData();
+      } else {
+        const data = await res.json();
+        showToast(data.message || "Failed to approve student.", "error");
       }
     } catch {
-      showToast("Purge timeout", "error");
+      showToast("Network failure, could not approve student.", "error");
     }
   };
 
@@ -410,17 +721,21 @@ export default function App() {
   };
 
   const onDeleteQuiz = async (quizId: string) => {
-    const isConfirmed = window.confirm("Terminate this examination packet? Existing assignments will be flattened.");
-    if (!isConfirmed) return;
-    try {
-      const res = await fetch(`/api/quizzes/${quizId}`, { method: "DELETE" });
-      if (res.ok) {
-        showToast("Quiz deleted successfully.", "success");
-        await refreshData();
+    handleCustomConfirm(
+      "Terminate Examination Packet",
+      "Terminate this examination packet? Existing assignments will be flattened.",
+      async () => {
+        try {
+          const res = await fetch(`/api/quizzes/${quizId}`, { method: "DELETE" });
+          if (res.ok) {
+            showToast("Quiz deleted successfully.", "success");
+            await refreshData();
+          }
+        } catch {
+          showToast("Delete timeout", "error");
+        }
       }
-    } catch {
-      showToast("Delete timeout", "error");
-    }
+    );
   };
 
   const onSaveQuiz = async (quizPayload: any) => {
@@ -458,6 +773,48 @@ export default function App() {
       }
     } catch {
       showToast("Timeout adding question", "error");
+    }
+  };
+
+  const onSubmitQuestionSubmissions = async (subPayloads: any[]) => {
+    try {
+      const res = await fetch("/api/submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subPayloads)
+      });
+      if (res.ok) {
+        showToast("Your suggested questions were submitted to Dr. Vance for approval!", "success");
+        await refreshData();
+        return true;
+      } else {
+        showToast("Failed to submit suggested questions", "error");
+        return false;
+      }
+    } catch {
+      showToast("Network timeout submitting questions", "error");
+      return false;
+    }
+  };
+
+  const onReviewSubmission = async (id: string, status: "APPROVED" | "REJECTED", feedback?: string) => {
+    try {
+      const res = await fetch(`/api/submissions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, adminFeedback: feedback })
+      });
+      if (res.ok) {
+        showToast(status === "APPROVED" ? "Question APPROVED! Added to Quest Bank." : "Question submission rejected with feedback.", "success");
+        await refreshData();
+        return true;
+      } else {
+        showToast("Failed to update submission status.", "error");
+        return false;
+      }
+    } catch {
+      showToast("Communication link timeout updating submission status.", "error");
+      return false;
     }
   };
 
@@ -564,7 +921,7 @@ export default function App() {
       />
 
       {/* Mobile Bottom Navigation Bar styled in natural earthy colors */}
-      {user && view !== "student-quiz-taking" && (
+      {user && user.isApproved !== false && view !== "student-quiz-taking" && (
         <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#F9F8F6] border-t border-[#EBE7E0] shadow-lg flex items-center justify-around py-2.5 px-2">
           {user.role === "ADMIN" ? (
             <>
@@ -644,6 +1001,15 @@ export default function App() {
                 <span className="text-[10px] font-bold font-sans">Progress</span>
               </button>
               <button
+                onClick={() => triggerNavigate("student-submissions")}
+                className={`flex flex-col items-center gap-1 cursor-pointer flex-1 py-1 transition ${
+                  view === "student-submissions" ? "text-[#5A6F56]" : "text-[#8C847E]"
+                }`}
+              >
+                <FileQuestion className="h-5 w-5" />
+                <span className="text-[10px] font-bold font-sans">Suggest Qs</span>
+              </button>
+              <button
                 onClick={() => triggerNavigate("student-leaderboard")}
                 className={`flex flex-col items-center gap-1 cursor-pointer flex-1 py-1 transition ${
                   view === "student-leaderboard" ? "text-[#5A6F56]" : "text-[#8C847E]"
@@ -651,15 +1017,6 @@ export default function App() {
               >
                 <Trophy className="h-5 w-5" />
                 <span className="text-[10px] font-bold font-sans">Standings</span>
-              </button>
-              <button
-                onClick={() => triggerNavigate("student-profile")}
-                className={`flex flex-col items-center gap-1 cursor-pointer flex-1 py-1 transition ${
-                  view === "student-profile" ? "text-[#5A6F56]" : "text-[#8C847E]"
-                }`}
-              >
-                <UserIcon className="h-5 w-5" />
-                <span className="text-[10px] font-bold font-sans">Profile</span>
               </button>
             </>
           )}
@@ -725,6 +1082,19 @@ export default function App() {
                   >
                     Authenticate Account
                   </button>
+
+                  <div className="relative text-center flex items-center justify-center my-1">
+                    <span className="bg-white px-3 text-[10px] text-gray-400 font-mono uppercase z-10">or</span>
+                    <div className="absolute w-full border-b border-gray-200"></div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleContinueAsGuest}
+                    className="w-full py-3 bg-[#EEF2ED] hover:bg-[#DDE5DC] text-[#4A5D46] font-bold rounded-2xl cursor-pointer transition uppercase text-xs tracking-wider border border-[#5A6F56]/10"
+                  >
+                    Instant Student Signup (No Code) 🚀
+                  </button>
                 </form>
 
                 <div className="pt-4 border-t border-[#F3F1ED] text-center text-xs">
@@ -737,14 +1107,7 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Seeding Demo indicators */}
-                <div className="p-4 bg-[#F2EDE7] rounded-2xl border border-[#D9D3C7]/40 space-y-2.5 text-[11px] text-[#6B635E]">
-                  <strong className="text-[#2D2A29] block">Quick Sandbox credentials selection:</strong>
-                  <div className="grid grid-cols-1 gap-1 font-mono">
-                    <div>Student: <code className="bg-white/60 px-1 py-0.5 rounded text-slate-800">student@eduquiz.com</code> / password: <code className="bg-white/60 px-1 py-0.5 rounded text-slate-800">student123</code></div>
-                    <div>Admin: <code className="bg-white/60 px-1 py-0.5 rounded text-slate-800">admin@eduquiz.com</code> / password: <code className="bg-white/60 px-1 py-0.5 rounded text-slate-800">admin123</code></div>
-                  </div>
-                </div>
+
               </div>
             </div>
           )}
@@ -791,6 +1154,25 @@ export default function App() {
                       placeholder="Create security keys..."
                       className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-3 px-4 outline-none focus:ring-1 focus:ring-[#5A6F56]"
                     />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] uppercase font-bold text-amber-700 font-mono block flex items-center justify-between">
+                      <span>Admin Verification Code</span>
+                      <span className="text-[9px] font-normal text-amber-600 font-sans italic">Optional Code</span>
+                    </label>
+                    <input
+                      name="verificationCode"
+                      type="text"
+                      value={signUpVerificationCode}
+                      onChange={(e) => setSignUpVerificationCode(e.target.value)}
+                      placeholder="e.g. EQ-XXXX-XXXX (Optional)"
+                      className="w-full bg-[#FCFAF6] border border-[#BC8F71]/40 rounded-xl py-3 px-4 outline-none focus:ring-1 focus:ring-[#BC8F71] placeholder:text-[#BC8F71]/40 font-mono tracking-wider"
+                    />
+
+                    <p className="text-[10px] text-slate-500 leading-normal mt-1">
+                      This code is completely optional! Leave it blank to register and activate your student account instantly.
+                    </p>
                   </div>
 
                   <button
@@ -870,8 +1252,21 @@ export default function App() {
           {/* STUDENT LOGGED IN SERVICES ROUTER */}
           {/* ========================================== */}
           {user && user.role === "STUDENT" && (
-            <>
-              {/* STUDENT DASHBOARD */}
+            user.isApproved === false ? (
+              <StudentPendingApproval
+                user={user}
+                onLogout={handleLogout}
+                onActivated={(updatedUser) => {
+                  setUser(updatedUser);
+                  localStorage.setItem("eduquiz-student-user", JSON.stringify(updatedUser));
+                  showToast("Account activated successfully!", "success");
+                  triggerNavigate("student-dashboard");
+                }}
+                showToast={showToast}
+              />
+            ) : (
+              <>
+                {/* STUDENT DASHBOARD */}
               {view === "student-dashboard" && (
                 <StudentDashboard 
                   user={user}
@@ -893,6 +1288,7 @@ export default function App() {
                   attempts={attempts}
                   assignments={assignments}
                   onStartQuiz={onStartQuiz}
+                  user={user!}
                 />
               )}
 
@@ -902,6 +1298,11 @@ export default function App() {
                   quiz={quizzes.find(q => q.id === activeQuizId)!}
                   onCancel={() => triggerNavigate("student-quiz-list")}
                   onSubmitAttempt={onSubmitAttempt}
+                  allQuizzes={quizzes}
+                  attempts={attempts}
+                  onStartQuiz={onStartQuiz}
+                  user={user || undefined}
+                  assignments={assignments}
                 />
               )}
 
@@ -999,182 +1400,280 @@ export default function App() {
               {/* STUDENT EDIT PROFILE & SETTINGS */}
               {view === "student-profile" && (
                 <div className="max-w-xl mx-auto space-y-6 animate-fade-in font-sans">
-                  <div>
-                    <h1 className="text-2xl font-serif italic text-[#2D2A29]">Edit Student Profile</h1>
-                    <p className="text-xs text-[#8C847E]">Update your displayed visual avatar, correct credential spelling errors or edit password keys.</p>
-                  </div>
+                  {user.isGuest ? (
+                    <>
+                      <div>
+                        <h1 className="text-2xl font-serif italic text-amber-800">Activate Registered Account 🌟</h1>
+                        <p className="text-xs text-[#8C847E]">Promote your temporary local guest writer account to a fully synchronized account with the school's live leaderboard!</p>
+                      </div>
 
-                  <div className="bg-white p-6 sm:p-8 rounded-[36px] border border-[#EBE7E0] space-y-6">
-                    <form onSubmit={handleUpdateProfile} className="space-y-4 text-xs font-medium text-slate-700">
-                      
-                      {/* Avatar Picker / Upload UI */}
-                      <div className="space-y-3 pb-4 border-b border-[#F3F1ED]">
-                        <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Your Display Profile Image</label>
-                        <div className="flex flex-col sm:flex-row items-center gap-4">
-                          {/* Profile Avatar Frame resembling Facebook's empty silhouette if blank */}
-                          {user.avatar && user.avatar.trim() !== "" ? (
-                            <img 
-                              src={user.avatar} 
-                              alt="Active Avatar" 
-                              referrerPolicy="no-referrer"
-                              className="w-20 h-20 rounded-full object-cover border-4 border-[#5A6F56]/15 shadow-sm shrink-0" 
+                      <div className="bg-white p-6 sm:p-8 rounded-[36px] border border-amber-200 shadow-sm space-y-6">
+                        <div className="p-4 bg-amber-50 border border-amber-200/50 rounded-2xl text-xs text-amber-900 leading-relaxed">
+                          <strong>How does this work?</strong>
+                          <ul className="list-disc pl-4 mt-1.5 space-y-1">
+                            <li>Your local quiz achievements (attempts) will automatically upload and sync to your new account.</li>
+                            <li>You will be listed on the live school leaderboard and rank dynamically in the active semesters.</li>
+                            <li>You will be able to submit co-authored questions for extra credits!</li>
+                          </ul>
+                        </div>
+
+                        <form onSubmit={handleUpgradeGuest} className="space-y-4 text-xs font-medium text-slate-700">
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Complete Name</label>
+                            <input
+                              name="name"
+                              type="text"
+                              required
+                              placeholder="e.g. Alex Rivera"
+                              className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-3 px-4 outline-none focus:ring-1 focus:ring-[#5A6F56]"
                             />
-                          ) : (
-                            <div className="w-20 h-20 rounded-full bg-[#E2E8F0] flex items-end justify-center overflow-hidden border-4 border-stone-200 shadow-xs shrink-0">
-                              <svg className="w-16 h-16 text-white translate-y-[10%]" fill="currentColor" viewBox="0 0 24 24">
-                                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                              </svg>
-                            </div>
-                          )}
+                          </div>
 
-                          <div className="flex-1 space-y-2 text-center sm:text-left">
-                            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                              {/* Hidden standard file input */}
-                              <label className="cursor-pointer bg-[#5A6F56] hover:bg-[#4A5D46] px-4 py-2 rounded-xl text-white font-bold transition flex items-center gap-1.5 shadow-xs">
-                                <span>Upload New Picture</span>
-                                <input 
-                                  type="file" 
-                                  accept="image/*" 
-                                  className="hidden" 
-                                  onChange={async (e) => {
-                                    const file = e.target.files?.[0];
-                                    if (!file) return;
-                                    
-                                    if (file.size > 2.5 * 1024 * 1024) {
-                                      showToast("Image size must be smaller than 2.5MB", "error");
-                                      return;
-                                    }
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Active Email Address</label>
+                            <input
+                              name="email"
+                              type="email"
+                              required
+                              placeholder="e.g. alex@gmail.com"
+                              className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-3 px-4 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                            />
+                          </div>
 
-                                    const reader = new FileReader();
-                                    reader.onloadend = async () => {
-                                      const base64String = reader.result as string;
-                                      try {
-                                        const res = await fetch("/api/users/profile", {
-                                          method: "POST",
-                                          headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({ studentId: user.id, avatar: base64String })
-                                        });
-                                        if (res.ok) {
-                                          const nextU = (await res.json()).user;
-                                          setUser(nextU);
-                                          localStorage.setItem("eduquiz-student-user", JSON.stringify(nextU));
-                                          showToast("Profile avatar successfully updated!", "success");
-                                        } else {
-                                          showToast("Could not update profile", "error");
-                                        }
-                                      } catch {
-                                        showToast("Connection timeout, try again", "error");
-                                      }
-                                    };
-                                    reader.readAsDataURL(file);
-                                  }}
-                                />
-                              </label>
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Choose Password</label>
+                            <input
+                              name="password"
+                              type="password"
+                              required
+                              placeholder="Create your account password..."
+                              className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-3 px-4 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                            />
+                          </div>
 
-                              {/* Remove Picture button if custom picture set */}
-                              {user.avatar && user.avatar.trim() !== "" && (
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    try {
-                                      const res = await fetch("/api/users/profile", {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ studentId: user.id, avatar: "" })
-                                      });
-                                      if (res.ok) {
-                                        const nextU = (await res.json()).user;
-                                        setUser(nextU);
-                                        localStorage.setItem("eduquiz-student-user", JSON.stringify(nextU));
-                                        showToast("Profile image reset to neutral silhouette!", "success");
-                                      }
-                                    } catch {
-                                      showToast("Failed to reset avatar symbol", "error");
-                                    }
-                                  }}
-                                  className="px-3.5 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-xl font-bold cursor-pointer transition"
-                                >
-                                  Remove Image
-                                </button>
-                              )}
-                            </div>
-                            <p className="text-[10px] text-[#8C847E] font-medium max-w-sm">
-                              Upload standard JPEG, PNG or WebP files. The placeholder adapts dynamically to your custom layout aspect.
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-amber-700 font-mono block flex items-center justify-between">
+                              <span>Admin Verification Code</span>
+                              <span className="text-[9px] font-normal text-amber-600 font-sans italic">Optional Key</span>
+                            </label>
+                            <input
+                              name="verificationCode"
+                              type="text"
+                              value={upgradeVerificationCode}
+                              onChange={(e) => setUpgradeVerificationCode(e.target.value)}
+                              placeholder="e.g. EQ-XXXX-XXXX (Optional)"
+                              className="w-full bg-[#FCFAF6] border border-amber-300 rounded-xl py-3 px-4 outline-none focus:ring-1 focus:ring-amber-500 font-mono tracking-wider"
+                            />
+
+                            <p className="text-[10px] text-slate-500 mt-1">
+                              This code is completely optional! Leave it blank to activate your student account instantly.
                             </p>
                           </div>
+
+                          <div className="pt-4 border-t border-[#F3F1ED] flex justify-end gap-2 text-xs">
+                            <button
+                              type="submit"
+                              className="w-full sm:w-auto px-6 py-3 bg-[#5A6F56] hover:bg-[#4A5D46] text-white font-bold rounded-2xl cursor-pointer"
+                            >
+                              Verify & Promote Account 🚀
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <h1 className="text-2xl font-serif italic text-[#2D2A29]">Edit Student Profile</h1>
+                        <p className="text-xs text-[#8C847E]">Update your displayed visual avatar, correct credential spelling errors or edit password keys.</p>
+                      </div>
+
+                      <div className="bg-white p-6 sm:p-8 rounded-[36px] border border-[#EBE7E0] space-y-6">
+                        <form onSubmit={handleUpdateProfile} className="space-y-4 text-xs font-medium text-slate-700">
+                          
+                          {/* Avatar Picker / Upload UI */}
+                          <div className="space-y-3 pb-4 border-b border-[#F3F1ED]">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Your Display Profile Image</label>
+                            <div className="flex flex-col sm:flex-row items-center gap-4">
+                              {/* Profile Avatar Frame resembling Facebook's empty silhouette if blank */}
+                              {user.avatar && user.avatar.trim() !== "" ? (
+                                <img 
+                                  src={user.avatar} 
+                                  alt="Active Avatar" 
+                                  referrerPolicy="no-referrer"
+                                  className="w-20 h-20 rounded-full object-cover border-4 border-[#5A6F56]/15 shadow-sm shrink-0" 
+                                />
+                              ) : (
+                                <div className="w-20 h-20 rounded-full bg-[#E2E8F0] flex items-end justify-center overflow-hidden border-4 border-stone-200 shadow-xs shrink-0">
+                                  <svg className="w-16 h-16 text-white translate-y-[10%]" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                                  </svg>
+                                </div>
+                              )}
+
+                              <div className="flex-1 space-y-2 text-center sm:text-left">
+                                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                                  {/* Hidden standard file input */}
+                                  <label className="cursor-pointer bg-[#5A6F56] hover:bg-[#4A5D46] px-4 py-2 rounded-xl text-white font-bold transition flex items-center gap-1.5 shadow-xs">
+                                    <span>Upload New Picture</span>
+                                    <input 
+                                      type="file" 
+                                      accept="image/*" 
+                                      className="hidden" 
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+                                        
+                                        if (file.size > 2.5 * 1024 * 1024) {
+                                          showToast("Image size must be smaller than 2.5MB", "error");
+                                          return;
+                                        }
+
+                                        const reader = new FileReader();
+                                        reader.onloadend = async () => {
+                                          const base64String = reader.result as string;
+                                          try {
+                                            const res = await fetch("/api/users/profile", {
+                                              method: "POST",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ studentId: user.id, avatar: base64String })
+                                            });
+                                            if (res.ok) {
+                                              const nextU = (await res.json()).user;
+                                              setUser(nextU);
+                                              localStorage.setItem("eduquiz-student-user", JSON.stringify(nextU));
+                                              showToast("Profile avatar successfully updated!", "success");
+                                            } else {
+                                              showToast("Could not update profile", "error");
+                                            }
+                                          } catch {
+                                            showToast("Connection timeout, try again", "error");
+                                          }
+                                        };
+                                        reader.readAsDataURL(file);
+                                      }}
+                                    />
+                                  </label>
+
+                                  {/* Remove Picture button if custom picture set */}
+                                  {user.avatar && user.avatar.trim() !== "" && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          const res = await fetch("/api/users/profile", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ studentId: user.id, avatar: "" })
+                                          });
+                                          if (res.ok) {
+                                            const nextU = (await res.json()).user;
+                                            setUser(nextU);
+                                            localStorage.setItem("eduquiz-student-user", JSON.stringify(nextU));
+                                            showToast("Profile image reset to neutral silhouette!", "success");
+                                          }
+                                        } catch {
+                                          showToast("Failed to reset avatar symbol", "error");
+                                        }
+                                      }}
+                                      className="px-3.5 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-xl font-bold cursor-pointer transition"
+                                    >
+                                      Remove Image
+                                    </button>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-[#8C847E] font-medium max-w-sm">
+                                  Upload standard JPEG, PNG or WebP files. The placeholder adapts dynamically to your custom layout aspect.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Roster Full Name</label>
+                            <input
+                              name="name"
+                              type="text"
+                              defaultValue={user.name}
+                              required
+                              className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl py-2.5 px-3 outline-none"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Roster Email Address</label>
+                            <input
+                              name="email"
+                              type="email"
+                              defaultValue={user.email}
+                              required
+                              className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl py-2.5 px-3 outline-none"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Update Password Keys</label>
+                            <input
+                              name="password"
+                              type="password"
+                              placeholder="Leave space blank to keep unchanged keys"
+                              className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl py-2.5 px-3 outline-none"
+                            />
+                          </div>
+
+                          <div className="pt-4 border-t border-[#F3F1ED] flex justify-end gap-2 text-xs">
+                            <button
+                              type="submit"
+                              className="px-6 py-3 bg-[#5A6F56] hover:bg-[#4A5D46] text-white font-bold rounded-2xl cursor-pointer"
+                            >
+                              Save Credentials changes
+                            </button>
+                          </div>
+                        </form>
+
+                        {/* Dangerous section */}
+                        <div className="pt-6 border-t border-rose-100 space-y-4">
+                          <div>
+                            <h4 className="font-bold text-rose-800 text-xs">Delete Student Account</h4>
+                            <p className="text-[10px] text-[#8C847E]">Permanently delete your profile and all quiz records.</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              handleCustomConfirm(
+                                "Terminate Account",
+                                "Are you sure you want to terminate your account? All logs will be deleted.",
+                                async () => {
+                                  try {
+                                    const res = await fetch(`/api/students/${user.id}`, { method: "DELETE" });
+                                    if (res.ok) {
+                                      showToast("Account deleted successfully.", "success");
+                                      handleLogout();
+                                    }
+                                  } catch {}
+                                }
+                              );
+                            }}
+                            className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold border border-rose-200 rounded-xl text-xs"
+                          >
+                            Self Delete Account
+                          </button>
                         </div>
                       </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Roster Full Name</label>
-                        <input
-                          name="name"
-                          type="text"
-                          defaultValue={user.name}
-                          required
-                          className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl py-2.5 px-3 outline-none"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Roster Email Address</label>
-                        <input
-                          name="email"
-                          type="email"
-                          defaultValue={user.email}
-                          required
-                          className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl py-2.5 px-3 outline-none"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] uppercase font-bold text-[#8C847E] font-mono block">Update Password Keys</label>
-                        <input
-                          name="password"
-                          type="password"
-                          placeholder="Leave space blank to keep unchanged keys"
-                          className="w-full bg-[#F5F3EF] border border-[#D9D3C7] rounded-xl py-2.5 px-3 outline-none"
-                        />
-                      </div>
-
-                      <div className="pt-4 border-t border-[#F3F1ED] flex justify-end gap-2 text-xs">
-                        <button
-                          type="submit"
-                          className="px-6 py-3 bg-[#5A6F56] hover:bg-[#4A5D46] text-white font-bold rounded-2xl cursor-pointer"
-                        >
-                          Save Credentials changes
-                        </button>
-                      </div>
-                    </form>
-
-                    {/* Dangerous section */}
-                    <div className="pt-6 border-t border-rose-100 space-y-4">
-                      <div>
-                        <h4 className="font-bold text-rose-800 text-xs">Delete Student Account</h4>
-                        <p className="text-[10px] text-[#8C847E]">Permanently delete your profile and all quiz records.</p>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          const isConfirmed = window.confirm("Are you sure you want to terminate your account? All logs will be deleted.");
-                          if (isConfirmed) {
-                            try {
-                              const res = await fetch(`/api/students/${user.id}`, { method: "DELETE" });
-                              if (res.ok) {
-                                showToast("Account deleted successfully.", "success");
-                                handleLogout();
-                              }
-                            } catch {}
-                          }
-                        }}
-                        className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold border border-rose-200 rounded-xl text-xs"
-                      >
-                        Self Delete Account
-                      </button>
-                    </div>
-                  </div>
+                    </>
+                  )}
                 </div>
               )}
+
+              {/* STUDENT SUGGESTIONS & CO-AUTHORING DESK */}
+              {view === "student-submissions" && (
+                <StudentSubmissionsView 
+                  user={user}
+                  submissions={submissions}
+                  onSubmitSubmissions={onSubmitQuestionSubmissions}
+                />
+              )}
             </>
+            )
           )}
 
           {/* ========================================== */}
@@ -1193,12 +1692,22 @@ export default function App() {
                 />
               )}
 
+              {/* ADMIN PROPOSALS REVIEW AUDIT */}
+              {view === "admin-submissions" && (
+                <AdminSubmissionsView 
+                  submissions={submissions}
+                  onReviewSubmission={onReviewSubmission}
+                />
+              )}
+
               {/* ADMIN STUDENT DIRECTORY ROSTER */}
               {view === "admin-students" && (
                 <AdminStudents 
                   students={students}
+                  onCreateStudent={onCreateStudent}
                   onUpdateStudent={onUpdateStudent}
                   onDeleteStudent={onDeleteStudent}
+                  onApproveStudent={onApproveStudent}
                 />
               )}
 
@@ -1265,6 +1774,7 @@ export default function App() {
                   leaderboard={leaderboard}
                   onToggleVisibility={onToggleLeaderboardVisibility}
                   onResetLeaderboard={onResetLeaderboard}
+                  onConfirmDialog={handleCustomConfirm}
                 />
               )}
 
@@ -1283,46 +1793,193 @@ export default function App() {
                       onUpdateSettings={onUpdateSettings}
                     />
 
-                    {/* Secondary admin profile update */}
-                    <div className="bg-white p-6 rounded-[32px] border border-[#EBE7E0] space-y-4 shadow-2xs">
-                      <h3 className="font-bold text-[#2D2A29] text-xs uppercase tracking-widest font-mono border-b border-[#F3F1ED] pb-3">
-                        Revise admin credentials
-                      </h3>
-                      <form onSubmit={handleUpdateProfile} className="space-y-4 text-xs text-slate-700">
-                        <div className="space-y-1">
-                          <label className="text-[10px] uppercase font-bold text-[#8C847E]">Administrator Name</label>
-                          <input
-                            name="name"
-                            type="text"
-                            defaultValue={user.name}
-                            required
-                            className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
-                          />
+                    <div className="space-y-6">
+                      {/* Secondary admin profile update */}
+                      <div className="bg-white p-6 rounded-[32px] border border-[#EBE7E0] space-y-4 shadow-2xs">
+                        <h3 className="font-bold text-[#2D2A29] text-xs uppercase tracking-widest font-mono border-b border-[#F3F1ED] pb-3">
+                          Revise admin credentials
+                        </h3>
+                        <form onSubmit={handleUpdateProfile} className="space-y-4 text-xs text-slate-700">
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E]">Administrator Name</label>
+                            <input
+                              name="name"
+                              type="text"
+                              defaultValue={user.name}
+                              required
+                              className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] uppercase font-bold text-[#8C847E]">Administrator Email Address</label>
+                            <input
+                              name="email"
+                              type="email"
+                              defaultValue={user.email}
+                              required
+                              className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
+                            />
+                          </div>
+                          <div className="pt-2">
+                            <button
+                              type="submit"
+                              className="px-5 py-2.5 bg-slate-900 text-white font-bold rounded-xl text-xs hover:bg-slate-800 transition cursor-pointer"
+                            >
+                              Save profile credentials
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+
+                      {/* KEY CODE VERIFICATION MANAGEMENT PANEL */}
+                      <div className="bg-white p-6 rounded-[32px] border border-[#BC8F71]/35 space-y-4 shadow-xs relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-24 h-24 bg-amber-50 rounded-bl-full pointer-events-none flex items-center justify-center pl-7 pb-7 text-amber-500 font-mono text-xl">
+                          🔑
                         </div>
-                        <div className="space-y-1">
-                          <label className="text-[10px] uppercase font-bold text-[#8C847E]">Administrator Email Address</label>
-                          <input
-                            name="email"
-                            type="email"
-                            defaultValue={user.email}
-                            required
-                            className="w-full bg-[#F9F8F6] border border-[#D9D3C7] rounded-xl py-2 px-3 outline-none focus:ring-1 focus:ring-[#5A6F56]"
-                          />
+                        <div>
+                          <h3 className="font-bold text-[#2D2A29] text-xs uppercase tracking-widest font-mono border-b border-[#F3F1ED] pb-3">
+                            Validation Keys Generator
+                          </h3>
+                          <p className="text-[11px] text-slate-500 mt-2">
+                            Generate unique, single-use active validation tokens for student signup and verification-code promotion. 
+                          </p>
                         </div>
-                        <div className="pt-2">
-                          <button
-                            type="submit"
-                            className="px-5 py-2.5 bg-slate-900 text-white font-bold rounded-xl text-xs hover:bg-slate-800 transition cursor-pointer"
-                          >
-                            Save profile credentials
-                          </button>
+
+                        <div className="space-y-3">
+                          <span className="text-[10px] text-[#8C847E] font-mono tracking-wider uppercase block">
+                            Choose Verification Role to Generate:
+                          </span>
+                          <div className="grid grid-cols-2 gap-2 pb-1">
+                            <button
+                              type="button"
+                              onClick={() => handleGenerateVerificationCode("student")}
+                              className="px-3 py-3 bg-[#5A6F56] hover:bg-[#4a5d46] text-white font-bold rounded-xl text-[11px] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-3xs active:scale-95"
+                            >
+                              <span>👨‍🎓 Student Signup Key</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleGenerateVerificationCode("admin")}
+                              className="px-3 py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-[11px] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-3xs active:scale-95"
+                            >
+                              <span>⚙️ Admin Upgrade Key</span>
+                            </button>
+                          </div>
                         </div>
-                      </form>
+
+                        {/* DESCRIPTIVE PRESENTATION FOR RECENTLY GENERATED CODE & QR CODE */}
+                        {lastGeneratedKey && (
+                          <div className="bg-[#FAF9F6] border border-amber-300/60 rounded-2xl p-4 space-y-3 animate-fade-in relative overflow-hidden">
+                            <div className="flex items-center justify-between border-b border-[#EBE7E0] pb-2">
+                              <span className="text-[10px] uppercase font-bold text-amber-800 tracking-wider font-mono">
+                                🎯 Active {lastGeneratedType === "student" ? "Student" : "Admin"} Key Issued
+                              </span>
+                              <span className="text-[9.5px] bg-[#EBE7E0]/60 text-slate-705 px-2 py-0.5 rounded-full font-mono">
+                                Auto-Copied 📋
+                              </span>
+                            </div>
+
+                            <div className="flex gap-4 items-center">
+                              {/* QR Code Container */}
+                              <div className="bg-white p-2 rounded-xl border border-[#EBE7E0] shadow-3xs flex-shrink-0 flex items-center justify-center">
+                                <img 
+                                  src={`https://api.qrserver.com/v1/create-qr-code/?size=96&96&data=${encodeURIComponent(lastGeneratedKey)}`} 
+                                  alt="Verification QR Code"
+                                  className="w-24 h-24 object-contain"
+                                  referrerPolicy="no-referrer"
+                                />
+                              </div>
+
+                              <div className="space-y-1.5 flex-1 min-w-0">
+                                <div className="text-[10px] text-[#8C847E]">Click code below to copy again:</div>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await navigator.clipboard.writeText(lastGeneratedKey);
+                                      setCopiedNotification(true);
+                                      setTimeout(() => setCopiedNotification(false), 2000);
+                                    } catch {}
+                                  }}
+                                  className="w-full text-left font-mono font-black text-amber-950 text-xl tracking-wider select-all cursor-pointer hover:bg-amber-50 rounded-lg p-1.5 border border-dashed border-amber-300/40 bg-amber-50/20 active:scale-98 transition flex items-center justify-between"
+                                >
+                                  <span className="truncate">{lastGeneratedKey}</span>
+                                  {copiedNotification ? (
+                                    <span className="text-[9px] text-green-600 font-sans shrink-0 font-bold ml-1 bg-green-50 px-1.5 py-0.5 rounded animate-bounce">✓ Recopied</span>
+                                  ) : (
+                                    <span className="text-[9px] text-[#8C847E] font-sans font-normal ml-1">📋 Tap</span>
+                                  )}
+                                </button>
+                                <p className="text-[9.5px] text-stone-500 leading-snug">
+                                  Use this token for registry verification. Scan key or paste to prefill inputs instantly.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-[10px] uppercase font-bold text-[#8C847E] font-mono">
+                            <span className="flex items-center gap-2">
+                              <span>Active Unused Keys ({verificationCodes.length})</span>
+                              {verificationCodes.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={handleClearVerificationCodes}
+                                  className="text-[9px] text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-1.5 py-0.5 rounded transition cursor-pointer lowercase"
+                                >
+                                  (clear keys ✕)
+                                </button>
+                              )}
+                            </span>
+                            {verificationCodes.length > 0 && <span>Click any key below to Copy</span>}
+                          </div>
+
+                          {verificationCodes.length === 0 ? (
+                            <div className="text-center py-6 bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-400 text-[11px]">
+                              No active codes. Click "Generate" to provision client licenses.
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                              {verificationCodes.map((code) => (
+                                <div 
+                                  key={code} 
+                                  className="group flex items-center justify-between bg-amber-50/50 hover:bg-amber-50 border border-amber-200/50 rounded-xl p-2 transition"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(code);
+                                      setCopiedCodeAdmin(code);
+                                      setTimeout(() => setCopiedCodeAdmin(null), 1500);
+                                    }}
+                                    className="font-mono text-xs text-amber-950 hover:underline font-bold text-left truncate flex-1 flex items-center justify-between"
+                                    title="Click to copy"
+                                  >
+                                    <span>🔑 {code}</span>
+                                    {copiedCodeAdmin === code && (
+                                      <span className="text-[9px] text-green-600 bg-green-50 px-1 rounded mr-1 animate-pulse font-sans">✓ Copied</span>
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteVerificationCode(code)}
+                                    className="text-stone-400 hover:text-rose-600 text-[10px] pl-1 font-bold transition"
+                                    title="Delete key"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
                   {/* SUPABASE CLOUD SYNC & REPLICATION */}
-                  <AdminSupabaseSync />
+                  <AdminSupabaseSync currentUser={user} />
                 </div>
               )}
             </>
@@ -1331,6 +1988,40 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {confirmDialog && confirmDialog.isOpen && (
+        <div className="fixed inset-0 bg-black/55 backdrop-blur-xs flex items-center justify-center p-4 z-100 animate-fade-in font-sans">
+          <div className="bg-white max-w-sm w-full p-6 leading-relaxed rounded-[32px] border border-[#EBE7E0] space-y-4 shadow-2xl relative">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-serif italic text-[#2D2A29] font-bold">{confirmDialog.title}</h3>
+            </div>
+            
+            <p className="text-xs text-stone-600 leading-relaxed font-sans">{confirmDialog.message}</p>
+            
+            <div className="flex gap-2 pt-2 justify-end text-xs font-bold font-sans">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2 hover:bg-slate-100 rounded-xl transition text-stone-500 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDialog.onConfirm}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition cursor-pointer"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
